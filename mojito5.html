@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Mojito Smart Route</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: sans-serif; }
+    body { background-color: #121212; color: #ffffff; padding: 20px; display: flex; flex-direction: column; min-height: 100vh; gap: 16px; }
+    
+    .header { text-align: center; color: #a0a0a0; font-size: 1.2rem; font-weight: bold; }
+    
+    .status-card { background-color: #1e1e1e; border-radius: 16px; padding: 20px; text-align: center; }
+    .range-val { font-size: 3rem; font-weight: 800; color: #00ff7f; }
+    .soc-val { font-size: 1.1rem; color: #e0e0e0; margin-bottom: 12px; }
+    
+    input[type=range] { width: 100%; height: 28px; -webkit-appearance: none; background: #333; border-radius: 14px; }
+    input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 36px; height: 36px; border-radius: 50%; background: #00ff7f; cursor: pointer; }
+
+    .input-card { background-color: #1e1e1e; border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+    label { font-size: 0.9rem; color: #aaa; }
+    input[type=text] { width: 100%; padding: 14px; border-radius: 10px; border: 1px solid #444; background: #2a2a2a; color: white; font-size: 1.1rem; }
+
+    .btn { display: flex; align-items: center; justify-content: center; width: 100%; height: 75px; border: none; border-radius: 16px; font-size: 1.2rem; font-weight: bold; color: white; cursor: pointer; }
+    .btn-green { background-color: #00875a; }
+    .status-msg { font-size: 0.9rem; color: #ffb703; text-align: center; min-height: 24px; font-weight: bold; }
+  </style>
+</head>
+<body>
+
+  <div class="header">Next Mojito Smart Navi</div>
+
+  <div class="status-card">
+    <div class="range-val" id="range-display">~ 68 km</div>
+    <div class="soc-val">Akkustand: <span id="soc-display">100</span> %</div>
+    <input type="range" id="soc-slider" min="10" max="100" value="100" oninput="updateValues(this.value)">
+  </div>
+
+  <div class="input-card">
+    <label for="destination-input">WO MÖCHTEST DU HIN?</label>
+    <input type="text" id="destination-input" placeholder="z. B. Bern, Luzern oder Strasse 1">
+  </div>
+
+  <div class="status-msg" id="status-msg"></div>
+
+  <button class="btn btn-green" onclick="startPlanningProcess()">
+    🚀 Route mit Ladeplanung starten
+  </button>
+
+<script>
+  const MAX_RANGE = 80;
+  const SAFETY_BUFFER = 15;
+  const OCM_API_KEY = "DEIN_API_KEY"; // Optional: Hier OpenChargeMap Key eintragen
+
+  function updateValues(soc) {
+    document.getElementById('soc-display').innerText = soc;
+    const usablePct = Math.max(0, soc - SAFETY_BUFFER);
+    const range = Math.round((MAX_RANGE * usablePct) / 100);
+    document.getElementById('range-display').innerText = `~ ${range} km`;
+  }
+
+  // Hilfsfunktion: Versucht GPS mit einem strikten 4-Sekunden-Timeout zu holen
+  function getCurrentLocation() {
+    return new Promise((resolve) => {
+      if (!navigator.geolocation) {
+        resolve(null);
+        return;
+      }
+
+      let handled = false;
+      const timeout = setTimeout(() => {
+        if (!handled) {
+          handled = true;
+          console.warn("GPS Timeout erreicht.");
+          resolve(null);
+        }
+      }, 4000); // Max 4 Sekunden auf GPS warten
+
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          if (!handled) {
+            handled = true;
+            clearTimeout(timeout);
+            resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+          }
+        },
+        (err) => {
+          if (!handled) {
+            handled = true;
+            clearTimeout(timeout);
+            console.warn("GPS Fehler:", err);
+            resolve(null);
+          }
+        },
+        { enableHighAccuracy: true, timeout: 4000, maximumAge: 10000 }
+      );
+    });
+  }
+
+  async function startPlanningProcess() {
+    const dest = document.getElementById('destination-input').value.trim();
+    const status = document.getElementById('status-msg');
+
+    if (!dest) {
+      alert("Bitte gib zuerst ein Ziel ein!");
+      return;
+    }
+
+    status.innerText = "Ermittle Standort...";
+    const coords = await getCurrentLocation();
+
+    const soc = document.getElementById('soc-slider').value;
+    const usableRangeKm = Math.round((MAX_RANGE * Math.max(0, soc - SAFETY_BUFFER)) / 100);
+
+    if (coords) {
+      status.innerText = "Suche Ladestopp im Umkreis...";
+      fetchAndOpenRoute(coords.lat, coords.lng, dest, usableRangeKm);
+    } else {
+      // Fallback: Wenn GPS blockiert/aus ist, übergeben wir "My+Location" an Google Maps
+      status.innerText = "Kein GPS-Signal. Öffne Google Maps Direkt-Route...";
+      setTimeout(() => {
+        window.location.href = `https://www.google.com/maps/dir/?api=1&origin=My+Location&destination=${encodeURIComponent(dest)}&travelmode=two-wheeler`;
+      }, 1000);
+    }
+  }
+
+  async function fetchAndOpenRoute(lat, lng, dest, rangeKm) {
+    const status = document.getElementById('status-msg');
+    const ocmUrl = `https://api.openchargemap.io/v3/poi/?output=json&latitude=${lat}&longitude=${lng}&distance=${rangeKm}&distanceunit=KM&connectiontypeid=25,28,29&maxresults=5&key=${OCM_API_KEY}`;
+
+    try {
+      const response = await fetch(ocmUrl);
+      const data = await response.json();
+
+      if (data && data.length > 0) {
+        const charger = data[0].AddressInfo;
+        status.innerText = `Ladestopp: ${charger.Title || 'Ladestation'}`;
+        
+        setTimeout(() => {
+          window.location.href = `https://www.google.com/maps/dir/?api=1&origin=${lat},${lng}&destination=${encodeURIComponent(dest)}&waypoints=${charger.Latitude},${charger.Longitude}&travelmode=two-wheeler`;
+        }, 800);
+      } else {
+        status.innerText = "Keine Station im Radius. Starte Route...";
+        setTimeout(() => {
+          window.location.href = `https://www.google.com/maps/dir/?api=1&origin=${lat},${lng}&destination=${encodeURIComponent(dest)}&travelmode=two-wheeler`;
+        }, 800);
+      }
+    } catch (e) {
+      status.innerText = "Starte Route in Google Maps...";
+      window.location.href = `https://www.google.com/maps/dir/?api=1&origin=${lat},${lng}&destination=${encodeURIComponent(dest)}&travelmode=two-wheeler`;
+    }
+  }
+</script>
+
+</body>
+</html>
