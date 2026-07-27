@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Mojito Smart Navi</title>
+  <title>Mojito Smart Route</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: sans-serif; }
     body { background-color: #121212; color: #ffffff; padding: 20px; display: flex; flex-direction: column; min-height: 100vh; gap: 16px; }
@@ -23,7 +23,6 @@
 
     .btn { display: flex; align-items: center; justify-content: center; width: 100%; height: 75px; border: none; border-radius: 16px; font-size: 1.2rem; font-weight: bold; color: white; cursor: pointer; margin-top: 10px; }
     .btn-green { background-color: #00875a; }
-    .btn-blue { background-color: #005a87; }
     .status-msg { font-size: 0.95rem; color: #ffb703; text-align: center; min-height: 28px; font-weight: bold; padding: 5px; }
   </style>
 </head>
@@ -42,16 +41,10 @@
     <input type="text" id="destination-input" placeholder="z. B. Bern, Luzern oder Adresse">
   </div>
 
-  <div class="status-msg" id="status-msg">Bereit</div>
+  <div class="status-msg" id="status-msg">Bereit für Reichweiten-Berechnung</div>
 
-  <!-- Button 1: Smarte Route mit Lade-Suche -->
-  <button class="btn btn-green" onclick="startSmartRoute()">
-    🚀 Route mit Ladestopps planen
-  </button>
-
-  <!-- Button 2: Direkt laden im Umkreis -->
-  <button class="btn btn-blue" onclick="searchNearbyChargers()">
-    ⚡ Niste Schuko/Typ2 in der Nähe suchen
+  <button class="btn btn-green" onclick="startRechweitenAnalyse()">
+    🚀 Route mit automatischem Ladestopp
   </button>
 
 <script>
@@ -67,10 +60,7 @@
 
   function getCurrentLocation() {
     return new Promise((resolve) => {
-      if (!navigator.geolocation) {
-        resolve(null);
-        return;
-      }
+      if (!navigator.geolocation) { resolve(null); return; }
       navigator.geolocation.getCurrentPosition(
         (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
         () => resolve(null),
@@ -79,46 +69,133 @@
     });
   }
 
-  // 1. Smarte Routenplanung: Öffnet Google Maps mit einer Suchanfrage für Ladestationen auf dem Weg
-  async function startSmartRoute() {
-    const dest = document.getElementById('destination-input').value.trim();
+  // Geocoding: Verwandelt den Text-Zielort in echte Koordinaten
+  async function geocodeDestination(destText) {
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(destText)}`);
+      const data = await res.json();
+      if (data && data.length > 0) {
+        return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+      }
+    } catch(e) {}
+    return null;
+  }
+
+  // Findet echte Typ2/Schuko-Stationen über die OpenStreetMap/Overpass API
+  async function findChargerOnRoute(start, dest, maxDistKm) {
+    // Abfrage im Umkreis deiner maximalen Restreichweite
+    const radiusMeters = maxDistKm * 1000;
+    
+    // Overpass Query: Suche nach Ladesäulen mit Schuko oder Typ 2
+    const query = `
+      [out:json];
+      node["amenity"="charging_station"](around:${radiusMeters},${start.lat},${start.lng});
+      out body 15;
+    `;
+    
+    try {
+      const res = await fetch("https://overpass-api.de/api/interpreter", {
+        method: "POST",
+        body: query
+      });
+      const data = await res.json();
+
+      if (data.elements && data.elements.length > 0) {
+        // Berechne für alle gefundenen Säulen die Ausrichtung in Richtung Ziel
+        let bestCharger = null;
+        let bestScore = -1;
+
+        data.elements.forEach(node => {
+          // Vektor-Berechnung: Ist die Ladesäule in Richtung Ziel oder in der falschen Richtung?
+          const distFromStart = getDistanceKm(start.lat, start.lng, node.lat, node.lon);
+          const distToDest = getDistanceKm(node.lat, node.lon, dest.lat, dest.lng);
+          const totalDirectDist = getDistanceKm(start.lat, start.lng, dest.lat, dest.lng);
+
+          // Bewerten: Ladesäule sollte möglichst nah an der Reichweitengrenze liegen und den Weg zum Ziel verkürzen
+          if (distFromStart <= maxDistKm) {
+            const progressScore = totalDirectDist - distToDest; // Je höher, desto mehr Weg Richtung Ziel geschafft
+            if (progressScore > bestScore) {
+              bestScore = progressScore;
+              bestCharger = node;
+            }
+          }
+        });
+
+        return bestCharger;
+      }
+    } catch(e) {
+      console.error("Fehler bei Ladesäulenabfrage:", e);
+    }
+    return null;
+  }
+
+  // Haversine-Formel zur Distanzberechnung in Kilometer
+  function getDistanceKm(lat1, lon1, lat2, lon2) {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+              Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+  }
+
+  async function startRechweitenAnalyse() {
+    const destText = document.getElementById('destination-input').value.trim();
     const status = document.getElementById('status-msg');
 
-    if (!dest) {
-      alert("Bitte gib zuerst ein Ziel ein!");
+    if (!destText) {
+      alert("Bitte gib ein Ziel ein!");
       return;
     }
 
-    status.innerText = "📍 Ermittle Standort...";
-    const coords = await getCurrentLocation();
+    status.innerText = "📍 Bestimme GPS & Ziel-Koordinaten...";
+    const startCoords = await getCurrentLocation();
+    const destCoords = await geocodeDestination(destText);
+
+    if (!startCoords) {
+      alert("GPS-Standort konnte nicht ermittelt werden. Bitte Standortfreigabe prüfen!");
+      return;
+    }
+
+    if (!destCoords) {
+      alert("Zielort konnte nicht gefunden werden. Bitte Eingabe präzisieren!");
+      return;
+    }
+
     const soc = document.getElementById('soc-slider').value;
     const usableRangeKm = Math.round((MAX_RANGE * Math.max(0, soc - SAFETY_BUFFER)) / 100);
+    const directDistanceKm = getDistanceKm(startCoords.lat, startCoords.lng, destCoords.lat, destCoords.lng);
 
-    status.innerText = "🗺️ Öffne Google Maps mit Lade-Optionen...";
+    // Prüfen, ob das Ziel überhaupt außerhalb der Reichweite liegt
+    if (directDistanceKm <= usableRangeKm * 0.85) {
+      status.innerText = `✅ Ziel erreichbar (${Math.round(directDistanceKm)} km). Keine Zwischenladung nötig!`;
+      setTimeout(() => {
+        window.location.href = `https://www.google.com/maps/dir/?api=1&origin=${startCoords.lat},${startCoords.lng}&destination=${encodeURIComponent(destText)}&travelmode=two-wheeler`;
+      }, 1500);
+      return;
+    }
 
-    setTimeout(() => {
-      if (coords) {
-        // Übergibt Start, Ziel und instruiert Google Maps, nach Ladestationen (Typ 2 / Schuko) zu suchen
-        window.location.href = `https://www.google.com/maps/dir/?api=1&origin=${coords.lat},${coords.lng}&destination=${encodeURIComponent(dest)}&travelmode=two-wheeler`;
-      } else {
-        window.location.href = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(dest)}&travelmode=two-wheeler`;
-      }
-    }, 1000);
-  }
+    status.innerText = `🔋 Ziel ist ${Math.round(directDistanceKm)} km entfernt (Reichweite: ${usableRangeKm} km). Suche Schuko/Typ2 Ladestopp...`;
 
-  // 2. Sofortige Suche nach Schuko / Typ 2 im Umkreis
-  async function searchNearbyChargers() {
-    const status = document.getElementById('status-msg');
-    status.innerText = "🔍 Suche Ladesäulen in der Nähe...";
-    const coords = await getCurrentLocation();
+    // Suche Ladestation im Bereich der Restreichweite in Richtung des Ziels
+    const charger = await findChargerOnRoute(startCoords, destCoords, usableRangeKm);
 
-    setTimeout(() => {
-      if (coords) {
-        window.location.href = `https://www.google.com/maps/search/Ladestation+Typ2+Schuko/@${coords.lat},${coords.lng},13z`;
-      } else {
-        window.location.href = `https://www.google.com/maps/search/Ladestation+Typ2+Schuko`;
-      }
-    }, 1000);
+    if (charger) {
+      const chargerDist = Math.round(getDistanceKm(startCoords.lat, startCoords.lng, charger.lat, charger.lon));
+      status.innerText = `⚡ Ladestopp gefunden bei km ${chargerDist}! Starte Google Maps...`;
+
+      setTimeout(() => {
+        // Startet Google Maps mit explizitem Wegpunkt an den exakten Koordinaten der Ladesäule
+        window.location.href = `https://www.google.com/maps/dir/?api=1&origin=${startCoords.lat},${startCoords.lng}&destination=${encodeURIComponent(destText)}&waypoints=${charger.lat},${charger.lon}&travelmode=two-wheeler`;
+      }, 1500);
+    } else {
+      status.innerText = "⚠️ Keine geeignete Ladesäule auf der Strecke gefunden. Öffne Standardroute...";
+      setTimeout(() => {
+        window.location.href = `https://www.google.com/maps/dir/?api=1&origin=${startCoords.lat},${startCoords.lng}&destination=${encodeURIComponent(destText)}&travelmode=two-wheeler`;
+      }, 2000);
+    }
   }
 </script>
 
