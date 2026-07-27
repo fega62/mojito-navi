@@ -23,16 +23,17 @@
 
     .summary-card { background-color: #1e2923; border: 1px solid #00875a; border-radius: 16px; padding: 16px; display: none; flex-direction: column; gap: 8px; font-size: 0.95rem; }
     .summary-title { font-weight: bold; color: #00ff7f; font-size: 1.1rem; margin-bottom: 4px; }
-    .stop-item { background: rgba(255,255,255,0.05); padding: 8px; border-radius: 8px; margin-top: 4px; }
+    .stop-item { background: rgba(255,255,255,0.08); padding: 10px; border-radius: 8px; margin-top: 6px; border-left: 3px solid #00ff7f; }
 
     .btn { display: flex; align-items: center; justify-content: center; width: 100%; height: 75px; border: none; border-radius: 16px; font-size: 1.2rem; font-weight: bold; color: white; cursor: pointer; margin-top: 10px; }
     .btn-green { background-color: #00875a; }
+    .btn-maps { background-color: #005a87; display: none; margin-top: 12px; }
     .status-msg { font-size: 0.95rem; color: #ffb703; text-align: center; min-height: 28px; font-weight: bold; padding: 5px; }
   </style>
 </head>
 <body>
 
-  <div class="header">Next Mojito Multi-Stop Navi</div>
+  <div class="header">Next Mojito Smart Navi</div>
 
   <div class="status-card">
     <div class="range-val" id="range-display">~ 68 km</div>
@@ -45,23 +46,30 @@
     <input type="text" id="destination-input" placeholder="z. B. Zürich HB">
   </div>
 
-  <div class="status-msg" id="status-msg">Bereit für Mehrstopp-Simulation</div>
+  <div class="status-msg" id="status-msg">Bereit für Mehrstopp-Berechnung</div>
 
-  <!-- BERECHNETE METER & ZEITEN -->
-  <div class="summary-card" id="summary-card">
-    <div class="summary-title">📊 Routen-Übersicht</div>
-    <div id="summary-content"></div>
-  </div>
-
-  <button class="btn btn-green" id="start-btn" onclick="planMultiStopRoute()">
-    🛵 Komplettroute mit Ladezeiten berechnen
+  <button class="btn btn-green" id="plan-btn" onclick="planMultiStopRoute()">
+    🔍 Route & Ladezeiten berechnen
   </button>
+
+  <!-- ERGEBNIS-ZUSAMMENFASSUNG -->
+  <div class="summary-card" id="summary-card">
+    <div class="summary-title">📊 Routen-Zusammenfassung</div>
+    <div id="summary-content"></div>
+    
+    <!-- MANUELLER BUTTON FÜR GOOGLE MAPS -->
+    <button class="btn btn-maps" id="maps-btn" onclick="startGoogleMaps()">
+      🗺️ Google Maps Navigation starten
+    </button>
+  </div>
 
 <script>
   const MAX_RANGE_KM = 80;
   const SAFETY_BUFFER_PCT = 15;
-  const CHARGE_RATE_MIN_PER_PCT = 1.5; // 0-100% in 2.5h (150 min) -> 1.5 min pro %
-  const AVG_SPEED_KMH = 45; // Durchschnittsgeschwindigkeit Landstraße/Stadt mit 80km/h Spitze
+  const CHARGE_RATE_MIN_PER_PCT = 1.5; 
+  const AVG_SPEED_KMH = 45; 
+
+  let generatedMapsUrl = "";
 
   function updateValues(soc) {
     document.getElementById('soc-display').innerText = soc;
@@ -120,7 +128,6 @@
           const name = (tags.name || "").toLowerCase();
           const operator = (tags.operator || "").toLowerCase();
 
-          // Ausschlussfilter für DC-Schnelllader
           if (name.includes("supercharger") || name.includes("ionity") || name.includes("fastned") || operator.includes("tesla")) {
             return;
           }
@@ -130,7 +137,6 @@
           const directDist = getDistanceKm(currentPos.lat, currentPos.lng, targetPos.lat, targetPos.lng);
           const detour = (distFromStart + distToTarget) - directDist;
 
-          // Station muss im sicheren Bereich liegen und Fortschritt in Richtung Ziel bringen
           if (distFromStart <= maxRangeKm && distToTarget < directDist) {
             if (detour < lowestDetourScore) {
               lowestDetourScore = detour;
@@ -159,59 +165,61 @@
     const status = document.getElementById('status-msg');
     const summaryCard = document.getElementById('summary-card');
     const summaryContent = document.getElementById('summary-content');
+    const mapsBtn = document.getElementById('maps-btn');
 
     if (!destText) { alert("Bitte gib ein Ziel ein!"); return; }
 
-    status.innerText = "📍 Ermittle Standort & Ziel...";
+    status.innerText = "📍 Ermittle Standort & Ziel-Koordinaten...";
     const startCoords = await getCurrentLocation();
     const destCoords = await geocodeDestination(destText);
 
-    if (!startCoords || !destCoords) { alert("GPS oder Ziel ort konnte nicht gefunden werden!"); return; }
+    if (!startCoords || !destCoords) { alert("GPS oder Zielort konnte nicht aufgelöst werden!"); return; }
 
     let currentSoc = parseFloat(document.getElementById('soc-slider').value);
     let currentPos = { lat: startCoords.lat, lng: startCoords.lng };
     
     const waypoints = [];
     const stopsSummary = [];
+    const routePoints = [{ lat: startCoords.lat, lng: startCoords.lng }];
     let totalChargeTimeMin = 0;
-    let totalDistKm = 0;
     let iterations = 0;
-    const maxIterations = 5; // Maximal 5 Ladestopps zur Sicherheit
+    const maxIterations = 5;
 
     summaryCard.style.display = "none";
+    mapsBtn.style.display = "none";
 
     while (iterations < maxIterations) {
       iterations++;
       const distToDest = getDistanceKm(currentPos.lat, currentPos.lng, destCoords.lat, destCoords.lng);
       const usableRangeKm = Math.round((MAX_RANGE_KM * Math.max(0, currentSoc - SAFETY_BUFFER_PCT)) / 100);
 
-      // Kann das Ziel direkt erreicht werden?
+      // Prüfen, ob das Ziel direkt erreichbar ist
       if (distToDest <= usableRangeKm * 0.9) {
-        totalDistKm += distToDest;
+        routePoints.push({ lat: destCoords.lat, lng: destCoords.lng });
         break; 
       }
 
-      status.innerText = `🔄 Berechne Ladestopp ${iterations} (Restakku: ${Math.round(currentSoc)}%)...`;
+      status.innerText = `🔄 Suche Ladestopp ${iterations} (Restakku: ${Math.round(currentSoc)}%)...`;
 
-      // Suche nach einer Ladestation im aktuellen Reichweitenradius
       const charger = await findChargerInRadius(currentPos, destCoords, usableRangeKm);
 
       if (!charger) {
-        status.innerText = `⚠️ Kein Stopp auf Teilstrecke ${iterations} gefunden. Starte Teilroute...`;
+        status.innerText = `⚠️ Kein weiterer Stopp gefunden. Plane Reststrecke...`;
+        routePoints.push({ lat: destCoords.lat, lng: destCoords.lng });
         break;
       }
 
-      // Ladezeit- & SoC-Berechnung für diesen Stopp
       const usedPct = (charger.dist / MAX_RANGE_KM) * 100;
       const arrivalSoc = Math.max(0, currentSoc - usedPct);
-      const targetChargeSoc = 85; // Wir laden für optimale Effizienz jeweils bis 85% auf
+      const targetChargeSoc = 85; 
       const chargeNeededPct = Math.max(0, targetChargeSoc - arrivalSoc);
       const chargeTimeMin = Math.round(chargeNeededPct * CHARGE_RATE_MIN_PER_PCT);
 
       totalChargeTimeMin += chargeTimeMin;
-      totalDistKm += charger.dist;
 
       waypoints.push(`${charger.lat},${charger.lon}`);
+      routePoints.push({ lat: charger.lat, lng: charger.lon });
+
       stopsSummary.push({
         num: iterations,
         name: charger.name,
@@ -220,12 +228,16 @@
         chargeTime: chargeTimeMin
       });
 
-      // Simulation für nächsten Streckenabschnitt aktualisieren
       currentPos = { lat: charger.lat, lng: charger.lon };
       currentSoc = targetChargeSoc; 
     }
 
-    // Zeiten zusammenrechnen
+    // Exakte Gesamtdistanz über alle Wegpunkte aufsummieren
+    let totalDistKm = 0;
+    for (let i = 0; i < routePoints.length - 1; i++) {
+      totalDistKm += getDistanceKm(routePoints[i].lat, routePoints[i].lng, routePoints[i+1].lat, routePoints[i+1].lng);
+    }
+
     const driveTimeMin = Math.round((totalDistKm / AVG_SPEED_KMH) * 60);
     const totalTripTimeMin = driveTimeMin + totalChargeTimeMin;
 
@@ -236,35 +248,39 @@
     const totalHours = Math.floor(totalTripTimeMin / 60);
     const totalMins = totalTripTimeMin % 60;
 
-    // Zusammenfassung im UI aufbauen
+    // Google Maps Link erzeugen
+    generatedMapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${startCoords.lat},${startCoords.lng}&destination=${encodeURIComponent(destText)}&travelmode=two-wheeler`;
+    if (waypoints.length > 0) {
+      generatedMapsUrl += `&waypoints=${waypoints.join('|')}`;
+    }
+
+    // Ergebnis im UI aufbauen
     let html = `<div><strong>Gesamtdistanz:</strong> ~${Math.round(totalDistKm)} km</div>`;
     html += `<div><strong>Gesamtdauer:</strong> ~${totalHours}h ${totalMins}m</div>`;
-    html += `<div style="color: #aaa; font-size: 0.85rem;">(🛵 Fahrt: ${driveHours}h ${driveMins}m | 🔌 Laden: ${chargeHours}h ${chargeMins}m)</div>`;
+    html += `<div style="color: #aaa; font-size: 0.85rem; margin-bottom: 8px;">(🛵 Fahrt: ${driveHours}h ${driveMins}m | 🔌 Laden: ${chargeHours}h ${chargeMins}m)</div>`;
     
     if (stopsSummary.length > 0) {
-      html += `<div style="margin-top: 8px; font-weight: bold;">Geplante Ladestopps (${stopsSummary.length}):</div>`;
+      html += `<div style="font-weight: bold; margin-top: 6px;">Geplante Ladestopps (${stopsSummary.length}):</div>`;
       stopsSummary.forEach(s => {
         html += `<div class="stop-item">`;
-        html += `<strong>Stopp ${s.num}:</strong> ${s.name} (nach ${s.dist} km)<br>`;
-        html += `Ankunft mit ~${s.arrSoc}% Akku ➔ <strong>${s.chargeTime} Min. laden</strong> (bis 85%)`;
+        html += `<strong>Stopp ${s.num}:</strong> ${s.name} (nach ~${s.dist} km)<br>`;
+        html += `Ankunft mit ~${s.arrSoc}% Akku ➔ <strong>${s.chargeTime} Min. laden</strong> (auf 85%)`;
         html += `</div>`;
       });
     } else {
-      html += `<div style="margin-top: 8px; color: #00ff7f;">Kein Ladestopp erforderlich!</div>`;
+      html += `<div style="margin-top: 8px; color: #00ff7f; font-weight: bold;">Kein Ladestopp erforderlich! Direktziel erreichbar.</div>`;
     }
 
     summaryContent.innerHTML = html;
     summaryCard.style.display = "flex";
-    status.innerText = "✅ Route fertig berechnet! Starte Google Maps...";
+    mapsBtn.style.display = "flex";
+    status.innerText = "✅ Berechnung abgeschlossen!";
+  }
 
-    // Starte Google Maps nach 2.5 Sekunden, damit der Fahrer die Zusammenfassung sieht
-    setTimeout(() => {
-      let mapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${startCoords.lat},${startCoords.lng}&destination=${encodeURIComponent(destText)}&travelmode=two-wheeler`;
-      if (waypoints.length > 0) {
-        mapsUrl += `&waypoints=${waypoints.join('|')}`;
-      }
-      window.location.href = mapsUrl;
-    }, 2500);
+  function startGoogleMaps() {
+    if (generatedMapsUrl) {
+      window.location.href = generatedMapsUrl;
+    }
   }
 </script>
 
