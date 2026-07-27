@@ -38,13 +38,13 @@
 
   <div class="input-card">
     <label for="destination-input">ZIELORT:</label>
-    <input type="text" id="destination-input" placeholder="z. B. Bern, Luzern oder Adresse">
+    <input type="text" id="destination-input" placeholder="z. B. Zürich HB">
   </div>
 
-  <div class="status-msg" id="status-msg">Bereit für Reichweiten-Berechnung</div>
+  <div class="status-msg" id="status-msg">Bereit für Routenplanung</div>
 
   <button class="btn btn-green" onclick="startRechweitenAnalyse()">
-    🚀 Route mit automatischem Ladestopp
+    🛵 Landstraßen-Route & Typ2/Schuko Stopp
   </button>
 
 <script>
@@ -69,7 +69,6 @@
     });
   }
 
-  // Geocoding: Verwandelt den Text-Zielort in echte Koordinaten
   async function geocodeDestination(destText) {
     try {
       const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(destText)}`);
@@ -81,16 +80,19 @@
     return null;
   }
 
-  // Findet echte Typ2/Schuko-Stationen über die OpenStreetMap/Overpass API
-  async function findChargerOnRoute(start, dest, maxDistKm) {
-    // Abfrage im Umkreis deiner maximalen Restreichweite
+  // Filtert gezielt nach Typ2 & Schuko und schließt Tesla Supercharger / DC Fast Charger aus
+  async function findACChargerOnRoute(start, dest, maxDistKm) {
     const radiusMeters = maxDistKm * 1000;
     
-    // Overpass Query: Suche nach Ladesäulen mit Schuko oder Typ 2
+    // Overpass Query: Nur Typ 2 / Schuko Abfrage
     const query = `
       [out:json];
-      node["amenity"="charging_station"](around:${radiusMeters},${start.lat},${start.lng});
-      out body 15;
+      (
+        node["amenity"="charging_station"]["socket:type2"](around:${radiusMeters},${start.lat},${start.lng});
+        node["amenity"="charging_station"]["socket:schuko"](around:${radiusMeters},${start.lat},${start.lng});
+        node["amenity"="charging_station"]["capacity"](around:${radiusMeters},${start.lat},${start.lng});
+      );
+      out body 30;
     `;
     
     try {
@@ -101,21 +103,32 @@
       const data = await res.json();
 
       if (data.elements && data.elements.length > 0) {
-        // Berechne für alle gefundenen Säulen die Ausrichtung in Richtung Ziel
         let bestCharger = null;
-        let bestScore = -1;
+        let lowestDetourScore = 999999;
 
         data.elements.forEach(node => {
-          // Vektor-Berechnung: Ist die Ladesäule in Richtung Ziel oder in der falschen Richtung?
+          const name = (node.tags && node.tags.name) ? node.tags.name.toLowerCase() : "";
+          const operator = (node.tags && node.tags.operator) ? node.tags.operator.toLowerCase() : "";
+
+          // Exkludiere Tesla Supercharger & Ionity (DC Schnelllader)
+          if (name.includes("supercharger") || name.includes("ionity") || operator.includes("tesla") || operator.includes("ionity")) {
+            return;
+          }
+
           const distFromStart = getDistanceKm(start.lat, start.lng, node.lat, node.lon);
           const distToDest = getDistanceKm(node.lat, node.lon, dest.lat, dest.lng);
-          const totalDirectDist = getDistanceKm(start.lat, start.lng, dest.lat, dest.lng);
+          const directDist = getDistanceKm(start.lat, start.lng, dest.lat, dest.lng);
 
-          // Bewerten: Ladesäule sollte möglichst nah an der Reichweitengrenze liegen und den Weg zum Ziel verkürzen
-          if (distFromStart <= maxDistKm) {
-            const progressScore = totalDirectDist - distToDest; // Je höher, desto mehr Weg Richtung Ziel geschafft
-            if (progressScore > bestScore) {
-              bestScore = progressScore;
+          // Berechne den Umweg: Wie viel Extra-Strecke entsteht durch diesen Stopp?
+          const detour = (distFromStart + distToDest) - directDist;
+
+          // Bedingungen:
+          // 1. Station liegt innerhalb der Restreichweite
+          // 2. Station führt dich näher an dein Ziel
+          // 3. Der Umweg ist möglichst minimal
+          if (distFromStart <= maxDistKm && distToDest < directDist) {
+            if (detour < lowestDetourScore) {
+              lowestDetourScore = detour;
               bestCharger = node;
             }
           }
@@ -129,7 +142,6 @@
     return null;
   }
 
-  // Haversine-Formel zur Distanzberechnung in Kilometer
   function getDistanceKm(lat1, lon1, lat2, lon2) {
     const R = 6371;
     const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -150,17 +162,12 @@
       return;
     }
 
-    status.innerText = "📍 Bestimme GPS & Ziel-Koordinaten...";
+    status.innerText = "📍 Ermittle Standorte...";
     const startCoords = await getCurrentLocation();
     const destCoords = await geocodeDestination(destText);
 
-    if (!startCoords) {
-      alert("GPS-Standort konnte nicht ermittelt werden. Bitte Standortfreigabe prüfen!");
-      return;
-    }
-
-    if (!destCoords) {
-      alert("Zielort konnte nicht gefunden werden. Bitte Eingabe präzisieren!");
+    if (!startCoords || !destCoords) {
+      alert("GPS oder Zielort konnte nicht aufgelöst werden!");
       return;
     }
 
@@ -168,30 +175,29 @@
     const usableRangeKm = Math.round((MAX_RANGE * Math.max(0, soc - SAFETY_BUFFER)) / 100);
     const directDistanceKm = getDistanceKm(startCoords.lat, startCoords.lng, destCoords.lat, destCoords.lng);
 
-    // Prüfen, ob das Ziel überhaupt außerhalb der Reichweite liegt
     if (directDistanceKm <= usableRangeKm * 0.85) {
-      status.innerText = `✅ Ziel erreichbar (${Math.round(directDistanceKm)} km). Keine Zwischenladung nötig!`;
+      status.innerText = `✅ Ziel erreichbar (${Math.round(directDistanceKm)} km). Direkt-Route startet...`;
       setTimeout(() => {
         window.location.href = `https://www.google.com/maps/dir/?api=1&origin=${startCoords.lat},${startCoords.lng}&destination=${encodeURIComponent(destText)}&travelmode=two-wheeler`;
-      }, 1500);
+      }, 1200);
       return;
     }
 
-    status.innerText = `🔋 Ziel ist ${Math.round(directDistanceKm)} km entfernt (Reichweite: ${usableRangeKm} km). Suche Schuko/Typ2 Ladestopp...`;
+    status.innerText = `🔋 Suche Typ 2 / Schuko Stopp entlang der Strecke (Max: ${usableRangeKm} km)...`;
 
-    // Suche Ladestation im Bereich der Restreichweite in Richtung des Ziels
-    const charger = await findChargerOnRoute(startCoords, destCoords, usableRangeKm);
+    const charger = await findACChargerOnRoute(startCoords, destCoords, usableRangeKm);
 
     if (charger) {
       const chargerDist = Math.round(getDistanceKm(startCoords.lat, startCoords.lng, charger.lat, charger.lon));
-      status.innerText = `⚡ Ladestopp gefunden bei km ${chargerDist}! Starte Google Maps...`;
+      const chargerName = (charger.tags && charger.tags.name) ? charger.tags.name : "Typ2/Schuko Ladestation";
+      status.innerText = `⚡ Typ 2 Stopp gefunden: ${chargerName} (bei km ${chargerDist})...`;
 
       setTimeout(() => {
-        // Startet Google Maps mit explizitem Wegpunkt an den exakten Koordinaten der Ladesäule
+        // Öffnet Google Maps im Zweirad-Modus (avoid highways / Landstraße) mit dem Typ-2-Wegpunkt
         window.location.href = `https://www.google.com/maps/dir/?api=1&origin=${startCoords.lat},${startCoords.lng}&destination=${encodeURIComponent(destText)}&waypoints=${charger.lat},${charger.lon}&travelmode=two-wheeler`;
       }, 1500);
     } else {
-      status.innerText = "⚠️ Keine geeignete Ladesäule auf der Strecke gefunden. Öffne Standardroute...";
+      status.innerText = "⚠️ Keine reine AC-Ladesäule direkt auf dem Weg gefunden. Starte Direktroute...";
       setTimeout(() => {
         window.location.href = `https://www.google.com/maps/dir/?api=1&origin=${startCoords.lat},${startCoords.lng}&destination=${encodeURIComponent(destText)}&travelmode=two-wheeler`;
       }, 2000);
