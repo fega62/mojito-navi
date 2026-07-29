@@ -43,10 +43,10 @@
 
   <div class="input-card">
     <label for="destination-input">ZIELORT:</label>
-    <input type="text" id="destination-input" placeholder="z. B. Paris Centre">
+    <input type="text" id="destination-input" placeholder="z. B. Paris Centre oder Zürich HB">
   </div>
 
-  <div class="status-msg" id="status-msg">Bereit für Mehrstopp-Berechnung</div>
+  <div class="status-msg" id="status-msg">Bereit für Routenplanung</div>
 
   <button class="btn btn-green" id="plan-btn" onclick="planMultiStopRoute()">
     🔍 Route & Ladezeiten berechnen
@@ -99,14 +99,14 @@
   }
 
   async function findChargerInRadius(currentPos, targetPos, maxRangeKm) {
-    const radiusMeters = Math.max(maxRangeKm * 1000, 4000);
+    const radiusMeters = Math.max(maxRangeKm * 1000, 6000);
     const query = `
       [out:json];
       (
         node["amenity"="charging_station"](around:${radiusMeters},${currentPos.lat},${currentPos.lng});
         way["amenity"="charging_station"](around:${radiusMeters},${currentPos.lat},${currentPos.lng});
       );
-      out center 40;
+      out center 60;
     `;
     
     try {
@@ -128,23 +128,20 @@
           const name = (tags.name || "").toLowerCase();
           const operator = (tags.operator || "").toLowerCase();
 
+          // Ausschließlich reine DC-Autobahn-Schnelllader ausschließen
           if (name.includes("supercharger") || name.includes("ionity") || name.includes("fastned") || operator.includes("tesla")) {
             return;
           }
 
           const distFromStart = getDistanceKm(currentPos.lat, currentPos.lng, lat, lon);
           const distToTarget = getDistanceKm(lat, lon, targetPos.lat, targetPos.lng);
-          
-            // Fortschritt: Wie viel näher bringt uns dieser Stopp ans Ziel im Vergleich zur aktuellen Position?
           const progress = directDistToTarget - distToTarget;
 
-          // Bedingungen: Innerhalb Reichweite + bringt uns dem Ziel näher (progress > 0)
           if (distFromStart <= maxRangeKm && progress > 0) {
-            // Bevorzuge Stationen, die möglichst weit vorne in Richtung Ziel liegen (nahe an maxRange)
             const score = distFromStart + (progress * 0.5);
             if (score > highestProgress) {
               highestProgress = score;
-              bestCharger = { lat: lat, lon: lon, name: tags.name || "Typ 2 Station", dist: distFromStart };
+              bestCharger = { lat: lat, lon: lon, name: tags.name || "Ladestation (Typ 2 / Schuko)", dist: distFromStart };
             }
           }
         });
@@ -187,7 +184,7 @@
     const routePoints = [{ lat: startCoords.lat, lng: startCoords.lng }];
     let totalChargeTimeMin = 0;
     let iterations = 0;
-    const maxIterations = 8; // Erhöht für Langstrecken wie Paris
+    const maxIterations = 15;
 
     summaryCard.style.display = "none";
     mapsBtn.style.display = "none";
@@ -197,18 +194,18 @@
       const distToDest = getDistanceKm(currentPos.lat, currentPos.lng, destCoords.lat, destCoords.lng);
       const usableRangeKm = Math.round((MAX_RANGE_KM * Math.max(0, currentSoc - SAFETY_BUFFER_PCT)) / 100);
 
-      // KORREKTUR: Kann das Ziel direkt von der AKTUELLEN Position mit dem AKTUELLEN Akku erreicht werden?
       if (distToDest <= usableRangeKm * 0.9) {
         routePoints.push({ lat: destCoords.lat, lng: destCoords.lng });
         break; 
       }
 
-      status.innerText = `🔄 Suche Ladestopp ${iterations} (Restakku: ${Math.round(currentSoc)}% / Reichweite: ${usableRangeKm} km)...`;
+      status.innerText = `🔄 Berechne Stopp ${iterations} (Restakku: ${Math.round(currentSoc)}%)...`;
 
       const charger = await findChargerInRadius(currentPos, destCoords, usableRangeKm);
 
       if (!charger) {
-        status.innerText = `⚠️ Abbruch bei Stopp ${iterations}: Keine weitere Ladesäule auf dieser Teilstrecke gefunden!`;
+        status.innerText = `⚠️ Stopp ${iterations}: Keine Ladesäule im Radius gefunden. Versuche Direkt-Reststrecke...`;
+        routePoints.push({ lat: destCoords.lat, lng: destCoords.lng });
         break;
       }
 
@@ -235,12 +232,10 @@
       currentSoc = targetChargeSoc; 
     }
 
-    // Falls das Ziel nach max. Iterationen immer noch nicht erreicht wurde, hängen wir das Ziel trotzdem als Endpunkt an
     if (routePoints[routePoints.length - 1].lat !== destCoords.lat) {
       routePoints.push({ lat: destCoords.lat, lng: destCoords.lng });
     }
 
-    // Exakte Gesamtdistanz über alle Wegpunkte aufsummieren
     let totalDistKm = 0;
     for (let i = 0; i < routePoints.length - 1; i++) {
       totalDistKm += getDistanceKm(routePoints[i].lat, routePoints[i].lng, routePoints[i+1].lat, routePoints[i+1].lng);
@@ -280,7 +275,7 @@
     summaryContent.innerHTML = html;
     summaryCard.style.display = "flex";
     mapsBtn.style.display = "flex";
-    status.innerText = "✅ Berechnung erfolgreich abgeschlossen!";
+    status.innerText = "✅ Routen- und Ladeplanung erfolgreich abgeschlossen!";
   }
 
   function startGoogleMaps() {
