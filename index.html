@@ -1,313 +1,554 @@
 <!DOCTYPE html>
 <html lang="de">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Mojito Smart Navi v2</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: sans-serif; }
-    body { background-color: #121212; color: #ffffff; padding: 20px; display: flex; flex-direction: column; min-height: 100vh; gap: 16px; }
-    
-    .header { text-align: center; color: #a0a0a0; font-size: 1.2rem; font-weight: bold; }
-    
-    .status-card { background-color: #1e1e1e; border-radius: 16px; padding: 20px; text-align: center; }
-    .range-val { font-size: 3rem; font-weight: 800; color: #00ff7f; }
-    .soc-val { font-size: 1.1rem; color: #e0e0e0; margin-bottom: 12px; }
-    
-    input[type=range] { width: 100%; height: 28px; -webkit-appearance: none; background: #333; border-radius: 14px; }
-    input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 36px; height: 36px; border-radius: 50%; background: #00ff7f; cursor: pointer; }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mojito Routenplaner</title>
+<style>
+  :root{
+    --bg:#12161A;
+    --panel:#1B2127;
+    --panel-2:#20272E;
+    --line:#2C343C;
+    --text:#EDEFEE;
+    --text-dim:#9AA5AC;
+    --volt:#C6FF3D;
+    --volt-dim:#8FCB1F;
+    --amber:#FFB74A;
+    --red:#FF6B5E;
+    --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:
+      radial-gradient(circle at 15% 0%, rgba(198,255,61,0.06), transparent 45%),
+      var(--bg);
+    color:var(--text);
+    font-family:var(--sans);
+    min-height:100vh;
+    padding:28px 16px 60px;
+  }
+  .wrap{max-width:640px;margin:0 auto;}
 
-    .input-card { background-color: #1e1e1e; border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
-    label { font-size: 0.85rem; color: #aaa; font-weight: bold; }
-    input[type=text] { width: 100%; padding: 14px; border-radius: 10px; border: 1px solid #444; background: #2a2a2a; color: white; font-size: 1.1rem; }
+  header{margin-bottom:28px;}
+  .eyebrow{
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:0.18em;
+    text-transform:uppercase;
+    color:var(--volt);
+    display:flex;
+    align-items:center;
+    gap:8px;
+    margin-bottom:8px;
+  }
+  .eyebrow .dot{width:6px;height:6px;border-radius:50%;background:var(--volt);box-shadow:0 0 8px var(--volt);}
+  h1{
+    font-size:28px;
+    line-height:1.15;
+    margin:0 0 6px;
+    font-weight:700;
+    letter-spacing:-0.01em;
+  }
+  .sub{color:var(--text-dim);font-size:14.5px;line-height:1.5;margin:0;}
 
-    .summary-card { background-color: #1e2923; border: 1px solid #00875a; border-radius: 16px; padding: 16px; display: none; flex-direction: column; gap: 8px; font-size: 0.95rem; }
-    .summary-title { font-weight: bold; color: #00ff7f; font-size: 1.1rem; margin-bottom: 4px; }
-    .stop-item { background: rgba(255,255,255,0.08); padding: 10px; border-radius: 8px; margin-top: 6px; border-left: 3px solid #00ff7f; }
+  .card{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:14px;
+    padding:20px;
+    margin-bottom:16px;
+  }
+  .card h2{
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:0.14em;
+    text-transform:uppercase;
+    color:var(--text-dim);
+    margin:0 0 16px;
+    font-weight:600;
+  }
 
-    .btn { display: flex; align-items: center; justify-content: center; width: 100%; height: 75px; border: none; border-radius: 16px; font-size: 1.2rem; font-weight: bold; color: white; cursor: pointer; margin-top: 10px; }
-    .btn-green { background-color: #00875a; }
-    .btn-maps { background-color: #005a87; display: none; margin-top: 12px; }
-    .status-msg { font-size: 0.95rem; color: #ffb703; text-align: center; min-height: 28px; font-weight: bold; padding: 5px; }
-  </style>
+  /* Slider */
+  .charge-row{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:14px;}
+  .charge-label{font-size:13.5px;color:var(--text-dim);}
+  .charge-value{font-family:var(--mono);font-size:34px;font-weight:700;line-height:1;}
+  input[type=range]{
+    -webkit-appearance:none;width:100%;height:6px;border-radius:4px;
+    background:linear-gradient(90deg, var(--red) 0%, var(--amber) 25%, var(--volt-dim) 55%, var(--volt) 100%);
+    outline:none;margin:6px 0 4px;
+  }
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none;width:22px;height:22px;border-radius:50%;
+    background:var(--text);border:3px solid var(--panel);
+    box-shadow:0 0 0 2px var(--line);cursor:pointer;margin-top:-8px;
+  }
+  input[type=range]::-moz-range-thumb{
+    width:16px;height:16px;border-radius:50%;background:var(--text);
+    border:3px solid var(--panel);cursor:pointer;
+  }
+  .charge-ticks{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--text-dim);}
+
+  /* Inputs */
+  label.field-label{
+    display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:0.1em;
+    text-transform:uppercase;color:var(--text-dim);margin-bottom:6px;
+  }
+  .field{margin-bottom:14px;}
+  .field:last-child{margin-bottom:0;}
+  input[type=text]{
+    width:100%;background:var(--panel-2);border:1px solid var(--line);
+    border-radius:8px;padding:12px 13px;color:var(--text);font-size:15px;
+    font-family:var(--sans);
+  }
+  input[type=text]:focus{outline:none;border-color:var(--volt-dim);}
+  input[type=text]::placeholder{color:#5C666D;}
+
+  button.primary{
+    width:100%;background:var(--volt);color:#12160A;border:none;
+    border-radius:8px;padding:14px;font-size:15px;font-weight:700;
+    cursor:pointer;font-family:var(--sans);margin-top:4px;
+    transition:transform .08s ease, background .15s ease;
+  }
+  button.primary:hover{background:var(--volt-dim);}
+  button.primary:active{transform:scale(0.98);}
+  button.primary:disabled{background:#3A4249;color:#6b747a;cursor:not-allowed;}
+
+  button.secondary{
+    width:100%;background:transparent;color:var(--text);
+    border:1px solid var(--line);border-radius:8px;padding:13px;
+    font-size:14.5px;font-weight:600;cursor:pointer;font-family:var(--sans);
+    display:flex;align-items:center;justify-content:center;gap:8px;
+  }
+  button.secondary:hover{border-color:var(--volt-dim);color:var(--volt);}
+
+  .status{font-family:var(--mono);font-size:12.5px;color:var(--text-dim);margin-top:10px;min-height:16px;}
+  .status.err{color:var(--red);}
+
+  /* Summary grid */
+  .summary-grid{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:4px;}
+  .summary-cell{background:var(--panel-2);padding:14px 16px;}
+  .summary-cell .n{font-family:var(--mono);font-size:22px;font-weight:700;color:var(--volt);}
+  .summary-cell .l{font-size:11px;color:var(--text-dim);margin-top:2px;}
+
+  /* Battery bar (signature element) */
+  .tripbar{margin:18px 0 6px;}
+  .tripbar-track{display:flex;height:34px;border-radius:6px;overflow:hidden;border:1px solid var(--line);}
+  .leg{position:relative;height:100%;border-right:2px solid var(--bg);}
+  .leg:last-child{border-right:none;}
+  .leg-fill{position:absolute;inset:0;background:linear-gradient(90deg, var(--volt-dim), var(--volt));opacity:0.85;}
+  .tripbar-labels{display:flex;font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-top:6px;justify-content:space-between;}
+
+  /* Route list */
+  .route-list{list-style:none;margin:18px 0 0;padding:0;}
+  .stop{
+    display:flex;gap:14px;padding:14px 0;border-top:1px solid var(--line);
+  }
+  .stop:first-child{border-top:none;}
+  .stop-marker{
+    flex:0 0 30px;height:30px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;
+    font-family:var(--mono);font-size:12px;font-weight:700;
+    background:var(--panel-2);border:1px solid var(--line);color:var(--volt);
+  }
+  .stop-marker.start{color:var(--text);}
+  .stop-marker.end{background:var(--volt);color:#12160A;border-color:var(--volt);}
+  .stop-body{flex:1;}
+  .stop-title{font-size:14.5px;font-weight:600;}
+  .stop-meta{font-family:var(--mono);font-size:12px;color:var(--text-dim);margin-top:3px;line-height:1.6;}
+  .leg-note{
+    font-family:var(--mono);font-size:11.5px;color:var(--text-dim);
+    padding:4px 0 4px 44px;
+  }
+
+  .note{
+    font-size:12.5px;color:var(--text-dim);line-height:1.6;
+    background:var(--panel-2);border:1px solid var(--line);border-radius:8px;
+    padding:12px 14px;margin-top:14px;
+  }
+  .note b{color:var(--text);}
+
+  .warn-box{
+    background:rgba(255,183,74,0.1);border:1px solid rgba(255,183,74,0.35);
+    border-radius:8px;padding:12px 14px;font-size:13.5px;color:var(--amber);
+    margin-bottom:14px;
+  }
+
+  .hidden{display:none !important;}
+  .spinner{
+    display:inline-block;width:12px;height:12px;border-radius:50%;
+    border:2px solid var(--line);border-top-color:var(--volt);
+    animation:spin .7s linear infinite;vertical-align:-1px;margin-right:6px;
+  }
+  @keyframes spin{to{transform:rotate(360deg);}}
+</style>
 </head>
 <body>
+<div class="wrap">
 
-  <div class="header">Next Mojito Smart Navi</div>
+  <header>
+    <div class="eyebrow"><span class="dot"></span>NEXT MOJITO &middot; 60&nbsp;KM REICHWEITE</div>
+    <h1>Routenplaner</h1>
+    <p class="sub">Ladestand eingeben, Ziel eingeben &mdash; die App rechnet Etappen und Ladestopps aus und übergibt die Route an Google Maps (ohne Autobahnen).</p>
+  </header>
 
-  <div class="status-card">
-    <div class="range-val" id="range-display">~ 68 km</div>
-    <div class="soc-val">Akkustand: <span id="soc-display">100</span> %</div>
-    <input type="range" id="soc-slider" min="10" max="100" value="100" oninput="updateValues(this.value)">
+  <div class="card">
+    <h2>01 &middot; Aktueller Ladestand</h2>
+    <div class="charge-row">
+      <span class="charge-label">Batteriestand</span>
+      <span class="charge-value" id="chargeValue">80<span style="font-size:16px;color:var(--text-dim);">%</span></span>
+    </div>
+    <input type="range" id="chargeSlider" min="0" max="100" value="80">
+    <div class="charge-ticks"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
   </div>
 
-  <div class="input-card">
-    <label for="destination-input">ZIELORT:</label>
-    <input type="text" id="destination-input" placeholder="z. B. Zürich HB oder Paris">
+  <div class="card">
+    <h2>02 &middot; Strecke</h2>
+    <div class="field">
+      <label class="field-label" for="startInput">Start</label>
+      <input type="text" id="startInput" placeholder="z. B. Basel, Schweiz">
+    </div>
+    <div class="field">
+      <label class="field-label" for="destInput">Ziel</label>
+      <input type="text" id="destInput" placeholder="z. B. Interlaken, Schweiz">
+    </div>
+    <button class="primary" id="calcBtn" style="margin-top:16px;">Route berechnen</button>
+    <div class="status" id="statusMsg"></div>
   </div>
 
-  <div class="status-msg" id="status-msg">Bereit für Neustart</div>
+  <div class="card hidden" id="resultsCard">
+    <h2>03 &middot; Schätzung</h2>
+    <div id="warnBox"></div>
+    <div class="summary-grid">
+      <div class="summary-cell"><div class="n" id="sumDist">–</div><div class="l">Gesamtstrecke</div></div>
+      <div class="summary-cell"><div class="n" id="sumStops">–</div><div class="l">Ladestopps</div></div>
+      <div class="summary-cell"><div class="n" id="sumDrive">–</div><div class="l">Fahrzeit</div></div>
+      <div class="summary-cell"><div class="n" id="sumTotal">–</div><div class="l">Gesamtdauer inkl. Laden</div></div>
+    </div>
 
-  <button class="btn btn-green" id="plan-btn" onclick="startFreshPlanning()">
-    🚀 Route & Ladezeiten berechnen
-  </button>
+    <div class="tripbar">
+      <div class="tripbar-track" id="tripbarTrack"></div>
+      <div class="tripbar-labels" id="tripbarLabels"></div>
+    </div>
 
-  <div class="summary-card" id="summary-card">
-    <div class="summary-title">📊 Routen-Zusammenfassung</div>
-    <div id="summary-content"></div>
-    
-    <button class="btn btn-maps" id="maps-btn" onclick="startGoogleMaps()">
-      🗺️ Google Maps Navigation starten
-    </button>
+    <ol class="route-list" id="routeList"></ol>
+
+    <div class="note" id="routeSourceNote"></div>
   </div>
+
+  <div class="card hidden" id="mapsCard">
+    <h2>04 &middot; Navigation</h2>
+    <button class="secondary" id="mapsBtn">↗ Route in Google Maps öffnen</button>
+    <div class="note"><b>Hinweis:</b> Google Maps wird mit „Autobahnen vermeiden“ geöffnet. Die vorgeschlagenen Ladestopps sind als Wegpunkte gesetzt &mdash; bitte den genauen Ladepunkt vor Ort/an der Station final prüfen.</div>
+  </div>
+
+</div>
 
 <script>
-  // FAHRZEUG-SPEZIFIKATIONEN (Next Mojito)
-  const MAX_RANGE_KM = 80;
-  const SAFETY_BUFFER_PCT = 15;
-  const CHARGE_RATE_MIN_PER_PCT = 1.5; // ~2.5h für 0-100%
-  const AVG_SPEED_KMH = 45; // Landstraße/Stadt Durchschnitt
+(function(){
+  const RANGE_100 = 60;        // km bei 100% Ladung
+  const CHARGE_TARGET = 0.85;  // Ladestopps bis 85%
+  const CHARGE_MIN = 0.15;     // Etappe endet bei 15% Restkapazität
+  const FULL_CHARGE_MIN = 150; // 2.5h Vollladung in Minuten
 
-  let generatedMapsUrl = "";
+  const chargeSlider = document.getElementById('chargeSlider');
+  const chargeValue = document.getElementById('chargeValue');
+  const startInput = document.getElementById('startInput');
+  const destInput = document.getElementById('destInput');
+  const calcBtn = document.getElementById('calcBtn');
+  const statusMsg = document.getElementById('statusMsg');
+  const resultsCard = document.getElementById('resultsCard');
+  const mapsCard = document.getElementById('mapsCard');
+  const mapsBtn = document.getElementById('mapsBtn');
+  const warnBox = document.getElementById('warnBox');
 
-  function updateValues(soc) {
-    document.getElementById('soc-display').innerText = soc;
-    const usablePct = Math.max(0, soc - SAFETY_BUFFER_PCT);
-    const range = Math.round((MAX_RANGE_KM * usablePct) / 100);
-    document.getElementById('range-display').innerText = `~ ${range} km`;
+  chargeSlider.addEventListener('input', () => {
+    chargeValue.innerHTML = chargeSlider.value + '<span style="font-size:16px;color:var(--text-dim);">%</span>';
+  });
+
+  let tripState = null; // holds coords for maps handoff
+
+  function setStatus(msg, isErr){
+    statusMsg.textContent = msg || '';
+    statusMsg.classList.toggle('err', !!isErr);
   }
 
-  function getCurrentLocation() {
-    return new Promise((resolve) => {
-      if (!navigator.geolocation) { resolve(null); return; }
-      navigator.geolocation.getCurrentPosition(
-        (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-        () => resolve(null),
-        { enableHighAccuracy: true, timeout: 5000 }
-      );
-    });
+  function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
+
+  async function geocode(query){
+    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`;
+    const res = await fetch(url, { headers: { 'Accept-Language': 'de' } });
+    if(!res.ok) throw new Error('Geocoding fehlgeschlagen');
+    const data = await res.json();
+    if(!data.length) throw new Error(`Ort nicht gefunden: "${query}"`);
+    return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon), label: data[0].display_name };
   }
 
-  async function geocodeDestination(destText) {
-    try {
-      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(destText)}`);
+  async function reverseGeocode(lat, lon){
+    try{
+      const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=13`;
+      const res = await fetch(url, { headers: { 'Accept-Language': 'de' } });
+      if(!res.ok) return null;
       const data = await res.json();
-      if (data && data.length > 0) {
-        return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
-      }
-    } catch(e) {}
-    return null;
+      const a = data.address || {};
+      const place = a.town || a.city || a.village || a.municipality || a.suburb || a.county;
+      return place || (data.display_name ? data.display_name.split(',')[0] : null);
+    }catch(e){ return null; }
   }
 
-  // Haversine-Formel zur Distanzberechnung (Luftlinie in km)
-  function getDistanceKm(lat1, lon1, lat2, lon2) {
-    const R = 6371;
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
-              Math.sin(dLon/2) * Math.sin(dLon/2);
-    return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
-  }
-
-  // EINZELNE SUCH-FUNKTION: Findet EINFACH die beste Ladesäule für eine Etappen-Strecke
-  async function fetchSingleCharger(fromPos, toPos, searchRadiusKm) {
-    const radiusMeters = Math.max(searchRadiusKm * 1000, 8000);
-    const query = `
-      [out:json];
-      (
-        node["amenity"="charging_station"](around:${radiusMeters},${fromPos.lat},${fromPos.lng});
-        way["amenity"="charging_station"](around:${radiusMeters},${fromPos.lat},${fromPos.lng});
-      );
-      out center 50;
-    `;
-    
-    try {
-      const res = await fetch("https://overpass-api.de/api/interpreter", { method: "POST", body: query });
+  async function findCharger(lat, lon){
+    try{
+      const url = `https://api.openchargemap.io/v3/poi/?output=json&latitude=${lat}&longitude=${lon}&distance=10&distanceunit=KM&maxresults=1&compact=true&verbose=false`;
+      const res = await fetch(url);
+      if(!res.ok) return null;
       const data = await res.json();
-
-      if (data && data.elements && data.elements.length > 0) {
-        let bestCandidate = null;
-        let highestScore = -999999;
-        const currentDistToDest = getDistanceKm(fromPos.lat, fromPos.lng, toPos.lat, toPos.lng);
-
-        data.elements.forEach(el => {
-          const lat = el.lat || (el.center && el.center.lat);
-          const lon = el.lon || (el.center && el.center.lon);
-          if (!lat || !lon) return;
-
-          const tags = el.tags || {};
-          const name = (tags.name || "").toLowerCase();
-          const operator = (tags.operator || "").toLowerCase();
-
-          // Reine DC-Schnelllader übergehen
-          if (name.includes("supercharger") || name.includes("ionity") || name.includes("fastned") || operator.includes("tesla")) {
-            return;
-          }
-
-          const distFromStart = getDistanceKm(fromPos.lat, fromPos.lng, lat, lon);
-          const distToDest = getDistanceKm(lat, lon, toPos.lat, toPos.lng);
-          const progress = currentDistToDest - distToDest;
-
-          // Station muss in der nutzbaren Reichweite liegen und Fortschritt bieten
-          if (distFromStart <= searchRadiusKm && progress > 1) {
-            const score = distFromStart + (progress * 0.4);
-            if (score > highestScore) {
-              highestScore = score;
-              bestCandidate = { lat, lon, name: tags.name || "Ladestation", dist: distFromStart };
-            }
-          }
-        });
-
-        return bestCandidate;
-      }
-    } catch(e) {}
-    return null;
+      if(!data.length) return null;
+      const info = data[0].AddressInfo || {};
+      return info.Title ? `${info.Title}${info.Town ? ', ' + info.Town : ''}` : null;
+    }catch(e){ return null; }
   }
 
-  // HAUPT-LOGIK BEIM NEUSTART
-  async function startFreshPlanning() {
-    const destText = document.getElementById('destination-input').value.trim();
-    const status = document.getElementById('status-msg');
-    const summaryCard = document.getElementById('summary-card');
-    const summaryContent = document.getElementById('summary-content');
-    const mapsBtn = document.getElementById('maps-btn');
-
-    if (!destText) { alert("Bitte gib ein Ziel ein!"); return; }
-
-    summaryCard.style.display = "none";
-    mapsBtn.style.display = "none";
-    status.innerText = "📍 Ermittle Standorte...";
-
-    const startCoords = await getCurrentLocation();
-    const destCoords = await geocodeDestination(destText);
-
-    if (!startCoords || !destCoords) { 
-      alert("GPS-Standort oder Zielort konnte nicht aufgelöst werden!"); 
-      status.innerText = "❌ Fehler bei der Standortbestimmung";
-      return; 
+  async function fetchRoute(start, dest){
+    const base = `https://router.project-osrm.org/route/v1/driving/${start.lon},${start.lat};${dest.lon},${dest.lat}`;
+    // Versuch 1: Autobahnen ausschliessen (falls vom Server unterstützt)
+    try{
+      const res = await fetch(`${base}?overview=full&geometries=geojson&steps=false&exclude=motorway`);
+      const data = await res.json();
+      if(data.code === 'Ok' && data.routes && data.routes.length){
+        return { route: data.routes[0], excludedMotorway: true };
+      }
+    }catch(e){ /* fall through */ }
+    // Fallback: normale Route (Autobahn-Ausschluss dann nur für Google Maps aktiv)
+    const res2 = await fetch(`${base}?overview=full&geometries=geojson&steps=false`);
+    const data2 = await res2.json();
+    if(data2.code !== 'Ok' || !data2.routes || !data2.routes.length){
+      throw new Error('Route konnte nicht berechnet werden');
     }
+    return { route: data2.routes[0], excludedMotorway: false };
+  }
 
-    let currentSoc = parseFloat(document.getElementById('soc-slider').value);
-    let currentPos = { lat: startCoords.lat, lng: startCoords.lng };
+  function haversine(lat1, lon1, lat2, lon2){
+    const R = 6371;
+    const dLat = (lat2-lat1) * Math.PI/180;
+    const dLon = (lon2-lon1) * Math.PI/180;
+    const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  }
 
-    const totalDirectKm = getDistanceKm(startCoords.lat, startCoords.lng, destCoords.lat, destCoords.lng);
-    const initialUsableRange = Math.round((MAX_RANGE_KM * Math.max(0, currentSoc - SAFETY_BUFFER_PCT)) / 100);
+  function pointAtDistance(coords, targetKm){
+    let cum = 0;
+    for(let i=0;i<coords.length-1;i++){
+      const [lon1,lat1] = coords[i];
+      const [lon2,lat2] = coords[i+1];
+      const segKm = haversine(lat1,lon1,lat2,lon2);
+      if(cum + segKm >= targetKm){
+        const frac = segKm === 0 ? 0 : (targetKm - cum) / segKm;
+        return { lat: lat1 + (lat2-lat1)*frac, lon: lon1 + (lon2-lon1)*frac };
+      }
+      cum += segKm;
+    }
+    const last = coords[coords.length-1];
+    return { lat: last[1], lon: last[0] };
+  }
 
-    // 1. ZIEL DIREKT ERREICHBAR?
-    if (totalDirectKm <= initialUsableRange * 0.85) {
-      status.innerText = "✅ Ziel direkt erreichbar!";
-      generatedMapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${startCoords.lat},${startCoords.lng}&destination=${encodeURIComponent(destText)}&travelmode=two-wheeler`;
-      
-      summaryContent.innerHTML = `<div><strong>Luftlinie zum Ziel:</strong> ~${Math.round(totalDirectKm)} km</div><div style="color: #00ff7f; margin-top: 5px; font-weight: bold;">Kein Ladestopp erforderlich!</div>`;
-      summaryCard.style.display = "flex";
-      mapsBtn.style.display = "flex";
+  function planLegs(totalKm, startPercent){
+    const legs = [];
+    let remaining = totalKm;
+    let cumulative = 0;
+    let pct = startPercent / 100;
+    while(true){
+      const usable = (pct - CHARGE_MIN) * RANGE_100;
+      if(usable >= remaining){
+        legs.push({ km: remaining, stopAfter: false });
+        break;
+      }
+      legs.push({ km: usable, stopAfter: true });
+      cumulative += usable;
+      remaining -= usable;
+      pct = CHARGE_TARGET;
+    }
+    return legs;
+  }
+
+  function fmtKm(km){ return km.toFixed(0) + ' km'; }
+  function fmtMin(min){
+    const h = Math.floor(min/60);
+    const m = Math.round(min%60);
+    if(h <= 0) return `${m} min`;
+    return `${h} h ${m.toString().padStart(2,'0')} min`;
+  }
+
+  calcBtn.addEventListener('click', async () => {
+    const startQ = startInput.value.trim();
+    const destQ = destInput.value.trim();
+    const chargePct = parseInt(chargeSlider.value, 10);
+
+    if(!startQ || !destQ){
+      setStatus('Bitte Start und Ziel angeben.', true);
+      return;
+    }
+    if(chargePct <= 15){
+      setStatus('Ladestand zu niedrig für eine Etappe — bitte vor Abfahrt laden.', true);
       return;
     }
 
-    // 2. ANZAHLE DER SCHRITTE SCHÄTZEN (FOR-SCHLEIFE ANSTATT WHILE-ENDLOSSCHLEIFE)
-    const neededStopsCount = Math.min(10, Math.ceil(totalDirectKm / (MAX_RANGE_KM * 0.7)));
-    status.innerText = `ℹ️ Benötige ca. ${neededStopsCount} Ladestopp(s). Starte Suche...`;
+    resultsCard.classList.add('hidden');
+    mapsCard.classList.add('hidden');
+    calcBtn.disabled = true;
 
-    const waypoints = [];
-    const stopsSummary = [];
-    const routePoints = [{ lat: startCoords.lat, lng: startCoords.lng }];
-    let totalChargeTimeMin = 0;
-    let totalDrivenKm = 0;
+    try{
+      setStatus('Orte werden gesucht…');
+      const startCoord = await geocode(startQ);
+      await sleep(1100);
+      const destCoord = await geocode(destQ);
+      await sleep(1100);
 
-    // KONTROLLIERTE FOR-SCHLEIFE (Keine Endlosschleife möglich!)
-    for (let step = 1; step <= neededStopsCount; step++) {
-      const remainingDistToDest = getDistanceKm(currentPos.lat, currentPos.lng, destCoords.lat, destCoords.lng);
-      const currentRangeKm = Math.round((MAX_RANGE_KM * Math.max(0, currentSoc - SAFETY_BUFFER_PCT)) / 100);
+      setStatus('Route wird berechnet…');
+      const { route, excludedMotorway } = await fetchRoute(startCoord, destCoord);
+      const totalKm = route.distance / 1000;
+      const driveMin = route.duration / 60;
+      const coords = route.geometry.coordinates; // [lon,lat]
 
-      // Falls die verbleibende Reststrecke nun mit dem aktuellen Akku klappt -> Abbruch der Suche
-      if (remainingDistToDest <= currentRangeKm * 0.85) {
-        break;
+      const legs = planLegs(totalKm, chargePct);
+      const stopCount = legs.filter(l => l.stopAfter).length;
+      const chargeMinPerStop = (CHARGE_TARGET - CHARGE_MIN) * FULL_CHARGE_MIN;
+      const totalChargeMin = stopCount * chargeMinPerStop;
+      const totalMin = driveMin + totalChargeMin;
+
+      // Ladestopp-Punkte entlang der Route bestimmen + benennen
+      setStatus('Ladestopps werden lokalisiert…');
+      const stopPoints = [];
+      let cum = 0;
+      for(const leg of legs){
+        cum += leg.km;
+        if(leg.stopAfter){
+          const pt = pointAtDistance(coords, cum);
+          const place = await reverseGeocode(pt.lat, pt.lon);
+          await sleep(1100);
+          const charger = await findCharger(pt.lat, pt.lon);
+          stopPoints.push({ ...pt, cumKm: cum, place: place || `${pt.lat.toFixed(3)}, ${pt.lon.toFixed(3)}`, charger });
+        }
       }
 
-      status.innerText = `🔄 Suche Ladestopp ${step} von ${neededStopsCount}...`;
-      const charger = await fetchSingleCharger(currentPos, destCoords, currentRangeKm);
+      // --- UI: Summary ---
+      document.getElementById('sumDist').textContent = fmtKm(totalKm);
+      document.getElementById('sumStops').textContent = stopCount;
+      document.getElementById('sumDrive').textContent = fmtMin(driveMin);
+      document.getElementById('sumTotal').textContent = fmtMin(totalMin);
 
-      if (!charger) {
-        status.innerText = `⚠️ Stopp ${step}: Keine Säule im Umkreis. Schließe Routenplanung ab...`;
-        break;
+      warnBox.innerHTML = '';
+      if(!excludedMotorway){
+        const w = document.createElement('div');
+        w.className = 'warn-box';
+        w.textContent = 'Hinweis: Die Schätzung basiert hier auf einer Route inkl. Autobahnen (Routing-Server hat den Ausschluss nicht unterstützt). Die Google-Maps-Route wird trotzdem mit „Autobahnen vermeiden“ geöffnet — Distanz/Zeit können dort leicht abweichen.';
+        warnBox.appendChild(w);
       }
 
-      // Daten für diesen Stopp berechnen
-      const usedPct = (charger.dist / MAX_RANGE_KM) * 100;
-      const arrSoc = Math.max(0, currentSoc - usedPct);
-      const targetSoc = 85; 
-      const chargeNeededPct = Math.max(0, targetSoc - arrSoc);
-      const chargeTimeMin = Math.round(chargeNeededPct * CHARGE_RATE_MIN_PER_PCT);
+      // --- UI: Tripbar ---
+      const track = document.getElementById('tripbarTrack');
+      const labels = document.getElementById('tripbarLabels');
+      track.innerHTML = '';
+      labels.innerHTML = '';
+      legs.forEach((leg) => {
+        const el = document.createElement('div');
+        el.className = 'leg';
+        el.style.flex = leg.km.toFixed(2);
+        const fill = document.createElement('div');
+        fill.className = 'leg-fill';
+        el.appendChild(fill);
+        track.appendChild(el);
+      });
+      const l1 = document.createElement('span'); l1.textContent = chargePct + '%';
+      const l2 = document.createElement('span'); l2.textContent = 'Ziel';
+      labels.appendChild(l1); labels.appendChild(l2);
 
-      totalChargeTimeMin += chargeTimeMin;
-      totalDrivenKm += charger.dist;
+      // --- UI: Route list ---
+      const list = document.getElementById('routeList');
+      list.innerHTML = '';
 
-      waypoints.push(`${charger.lat},${charger.lon}`);
-      routePoints.push({ lat: charger.lat, lng: charger.lon });
+      const startLi = document.createElement('li');
+      startLi.className = 'stop';
+      startLi.innerHTML = `
+        <div class="stop-marker start">S</div>
+        <div class="stop-body">
+          <div class="stop-title">${escapeHtml(startQ)}</div>
+          <div class="stop-meta">Start &middot; Ladestand ${chargePct}%</div>
+        </div>`;
+      list.appendChild(startLi);
 
-      stopsSummary.push({
-        num: step,
-        name: charger.name,
-        dist: Math.round(charger.dist),
-        arrSoc: Math.round(arrSoc),
-        chargeTime: chargeTimeMin
+      let stopIdx = 0;
+      legs.forEach((leg) => {
+        const legLi = document.createElement('li');
+        legLi.style.listStyle = 'none';
+        legLi.innerHTML = `<div class="leg-note">↓ ${fmtKm(leg.km)} Etappe${leg.stopAfter ? '' : ' bis zum Ziel'}</div>`;
+        list.appendChild(legLi);
+
+        if(leg.stopAfter){
+          const sp = stopPoints[stopIdx++];
+          const stopLi = document.createElement('li');
+          stopLi.className = 'stop';
+          stopLi.innerHTML = `
+            <div class="stop-marker">${stopIdx}</div>
+            <div class="stop-body">
+              <div class="stop-title">Ladestopp ${stopIdx} &middot; ${escapeHtml(sp.place)}</div>
+              <div class="stop-meta">
+                ${sp.charger ? '⚡ ' + escapeHtml(sp.charger) : '⚡ Kein Ladepunkt in 10 km gefunden — Position prüfen'}<br>
+                Ankunft ~15% · Laden bis 85% · ca. ${fmtMin(chargeMinPerStop)}
+              </div>
+            </div>`;
+          list.appendChild(stopLi);
+        }
       });
 
-      // Position und Akku für die nächste Etappe aktualisieren
-      currentPos = { lat: charger.lat, lng: charger.lon };
-      currentSoc = targetSoc;
+      const endLi = document.createElement('li');
+      endLi.className = 'stop';
+      endLi.innerHTML = `
+        <div class="stop-marker end">Z</div>
+        <div class="stop-body">
+          <div class="stop-title">${escapeHtml(destQ)}</div>
+          <div class="stop-meta">Ziel</div>
+        </div>`;
+      list.appendChild(endLi);
+
+      document.getElementById('routeSourceNote').innerHTML =
+        `<b>Annahmen:</b> 60 km Reichweite bei 100%, Ladestopps bei 15% Restkapazität, Nachladen bis 85%, Vollladung 2.5 h (linear angenommen). Orte via OpenStreetMap, Ladepunkte via Open Charge Map — bitte vor Abfahrt Verfügbarkeit/Stecker­typ prüfen.`;
+
+      resultsCard.classList.remove('hidden');
+      mapsCard.classList.remove('hidden');
+      setStatus('');
+
+      tripState = { startCoord, destCoord, stopPoints };
+
+    }catch(err){
+      console.error(err);
+      setStatus(err.message || 'Fehler bei der Berechnung.', true);
+    }finally{
+      calcBtn.disabled = false;
     }
+  });
 
-    // Letzten Streckenabschnitt bis zum Endziel dazurechnen
-    routePoints.push({ lat: destCoords.lat, lng: destCoords.lng });
-    const lastLegKm = getDistanceKm(currentPos.lat, currentPos.lng, destCoords.lat, destCoords.lng);
-    totalDrivenKm += lastLegKm;
-
-    // Zeiten ausrechnen
-    const driveTimeMin = Math.round((totalDrivenKm / AVG_SPEED_KMH) * 60);
-    const totalTripTimeMin = driveTimeMin + totalChargeTimeMin;
-
-    const driveH = Math.floor(driveTimeMin / 60);
-    const driveM = driveTimeMin % 60;
-    const chargeH = Math.floor(totalChargeTimeMin / 60);
-    const chargeM = totalChargeTimeMin % 60;
-    const totalH = Math.floor(totalTripTimeMin / 60);
-    const totalM = totalTripTimeMin % 60;
-
-    // Google Maps Link bauen
-    generatedMapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${startCoords.lat},${startCoords.lng}&destination=${encodeURIComponent(destText)}&travelmode=two-wheeler`;
-    if (waypoints.length > 0) {
-      generatedMapsUrl += `&waypoints=${waypoints.join('|')}`;
+  mapsBtn.addEventListener('click', () => {
+    if(!tripState) return;
+    const { startCoord, destCoord, stopPoints } = tripState;
+    let url = 'https://www.google.com/maps/dir/?api=1';
+    url += `&origin=${startCoord.lat},${startCoord.lon}`;
+    url += `&destination=${destCoord.lat},${destCoord.lon}`;
+    if(stopPoints.length){
+      const wp = stopPoints.map(s => `${s.lat},${s.lon}`).join('|');
+      url += `&waypoints=${encodeURIComponent(wp)}`;
     }
+    url += '&travelmode=driving&avoid=highways';
+    window.open(url, '_blank');
+  });
 
-    // UI-Zusammenfassung rendern
-    let html = `<div><strong>Gesamtdistanz (geschätzt):</strong> ~${Math.round(totalDrivenKm * 1.15)} km</div>`;
-    html += `<div><strong>Gesamtdauer:</strong> ~${totalH}h ${totalM}m</div>`;
-    html += `<div style="color: #aaa; font-size: 0.85rem; margin-bottom: 8px;">(🛵 Fahrt: ${driveH}h ${driveM}m | 🔌 Laden: ${chargeH}h ${chargeM}m)</div>`;
-    
-    if (stopsSummary.length > 0) {
-      html += `<div style="font-weight: bold; margin-top: 6px;">Geplante Ladestopps (${stopsSummary.length}):</div>`;
-      stopsSummary.forEach(s => {
-        html += `<div class="stop-item">`;
-        html += `<strong>Stopp ${s.num}:</strong> ${s.name} (nach ~${s.dist} km)<br>`;
-        html += `Ankunft mit ~${s.arrSoc}% Akku ➔ <strong>${s.chargeTime} Min. laden</strong> (auf 85%)`;
-        html += `</div>`;
-      });
-    }
-
-    summaryContent.innerHTML = html;
-    summaryCard.style.display = "flex";
-    mapsBtn.style.display = "flex";
-    status.innerText = "✅ Routen- und Ladeplanung erfolgreich abgeschlossen!";
+  function escapeHtml(str){
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
   }
-
-  function startGoogleMaps() {
-    if (generatedMapsUrl) {
-      window.location.href = generatedMapsUrl;
-    }
-  }
+})();
 </script>
-
 </body>
 </html>
