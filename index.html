@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Mojito Multi-Stop Navi</title>
+  <title>Mojito Smart Navi</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: sans-serif; }
     body { background-color: #121212; color: #ffffff; padding: 20px; display: flex; flex-direction: column; min-height: 100vh; gap: 16px; }
@@ -128,7 +128,6 @@
           const name = (tags.name || "").toLowerCase();
           const operator = (tags.operator || "").toLowerCase();
 
-          // Ausschließlich reine DC-Autobahn-Schnelllader ausschließen
           if (name.includes("supercharger") || name.includes("ionity") || name.includes("fastned") || operator.includes("tesla")) {
             return;
           }
@@ -179,32 +178,45 @@
     let currentSoc = parseFloat(document.getElementById('soc-slider').value);
     let currentPos = { lat: startCoords.lat, lng: startCoords.lng };
     
+    const usableRangeKm = Math.round((MAX_RANGE_KM * Math.max(0, currentSoc - SAFETY_BUFFER_PCT)) / 100);
+    const totalStraightDist = getDistanceKm(startCoords.lat, startCoords.lng, destCoords.lat, destCoords.lng);
+
+    // VORAB-ABSCHÄTZUNG DER STOPPS
+    let estimatedStops = 0;
+    if (totalStraightDist > usableRangeKm * 0.9) {
+      estimatedStops = Math.max(1, Math.ceil(totalStraightDist / usableRangeKm) - 1);
+    }
+
+    if (estimatedStops > 0) {
+      status.innerText = `ℹ️ Geschätzt: ~${estimatedStops} Ladestopp(s) nötig. Suche Punkte...`;
+    }
+
     const waypoints = [];
     const stopsSummary = [];
     const routePoints = [{ lat: startCoords.lat, lng: startCoords.lng }];
     let totalChargeTimeMin = 0;
-    let iterations = 0;
-    const maxIterations = 15;
+    let stopCounter = 0;
 
     summaryCard.style.display = "none";
     mapsBtn.style.display = "none";
 
-    while (iterations < maxIterations) {
-      iterations++;
+    while (stopCounter < 15) {
       const distToDest = getDistanceKm(currentPos.lat, currentPos.lng, destCoords.lat, destCoords.lng);
-      const usableRangeKm = Math.round((MAX_RANGE_KM * Math.max(0, currentSoc - SAFETY_BUFFER_PCT)) / 100);
+      const currentUsableRange = Math.round((MAX_RANGE_KM * Math.max(0, currentSoc - SAFETY_BUFFER_PCT)) / 100);
 
-      if (distToDest <= usableRangeKm * 0.9) {
+      if (distToDest <= currentUsableRange * 0.9) {
         routePoints.push({ lat: destCoords.lat, lng: destCoords.lng });
         break; 
       }
 
-      status.innerText = `🔄 Berechne Stopp ${iterations} (Restakku: ${Math.round(currentSoc)}%)...`;
+      stopCounter++;
+      status.innerText = `🔄 Berechne Ladestopp ${stopCounter} (von ~${estimatedStops})...`;
 
-      const charger = await findChargerInRadius(currentPos, destCoords, usableRangeKm);
+      const charger = await findChargerInRadius(currentPos, destCoords, currentUsableRange);
 
       if (!charger) {
-        status.innerText = `⚠️ Stopp ${iterations}: Keine Ladesäule im Radius gefunden. Versuche Direkt-Reststrecke...`;
+        status.innerText = `⚠️ Stopp ${stopCounter}: Keine Ladesäule gefunden. Versuche Direkt-Reststrecke...`;
+        stopCounter--;
         routePoints.push({ lat: destCoords.lat, lng: destCoords.lng });
         break;
       }
@@ -221,7 +233,7 @@
       routePoints.push({ lat: charger.lat, lng: charger.lon });
 
       stopsSummary.push({
-        num: iterations,
+        num: stopCounter,
         name: charger.name,
         dist: Math.round(charger.dist),
         arrSoc: Math.round(arrivalSoc),
