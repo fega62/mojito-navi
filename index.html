@@ -99,56 +99,62 @@
   }
 
   async function findChargerInRadius(currentPos, targetPos, maxRangeKm) {
-    const radiusMeters = Math.max(maxRangeKm * 1000, 6000);
-    const query = `
-      [out:json];
-      (
-        node["amenity"="charging_station"](around:${radiusMeters},${currentPos.lat},${currentPos.lng});
-        way["amenity"="charging_station"](around:${radiusMeters},${currentPos.lat},${currentPos.lng});
-      );
-      out center 60;
-    `;
+    // Wenn im normalen Radius nichts gefunden wird, dehnen wir den Suchbereich dynamisch aus (bis zu 15km)
+    let radiusMeters = Math.max(maxRangeKm * 1000, 8000);
     
-    try {
-      const res = await fetch("https://overpass-api.de/api/interpreter", { method: "POST", body: query });
-      const data = await res.json();
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const query = `
+        [out:json];
+        (
+          node["amenity"="charging_station"](around:${radiusMeters},${currentPos.lat},${currentPos.lng});
+          way["amenity"="charging_station"](around:${radiusMeters},${currentPos.lat},${currentPos.lng});
+        );
+        out center 60;
+      `;
+      
+      try {
+        const res = await fetch("https://overpass-api.de/api/interpreter", { method: "POST", body: query });
+        const data = await res.json();
 
-      if (data.elements && data.elements.length > 0) {
-        let bestCharger = null;
-        let highestProgress = -999999;
+        if (data.elements && data.elements.length > 0) {
+          let bestCharger = null;
+          let highestProgress = -999999;
+          const directDistToTarget = getDistanceKm(currentPos.lat, currentPos.lng, targetPos.lat, targetPos.lng);
 
-        const directDistToTarget = getDistanceKm(currentPos.lat, currentPos.lng, targetPos.lat, targetPos.lng);
+          data.elements.forEach(element => {
+            const lat = element.lat || (element.center && element.center.lat);
+            const lon = element.lon || (element.center && element.center.lon);
+            if (!lat || !lon) return;
 
-        data.elements.forEach(element => {
-          const lat = element.lat || (element.center && element.center.lat);
-          const lon = element.lon || (element.center && element.center.lon);
-          if (!lat || !lon) return;
+            const tags = element.tags || {};
+            const name = (tags.name || "").toLowerCase();
+            const operator = (tags.operator || "").toLowerCase();
 
-          const tags = element.tags || {};
-          const name = (tags.name || "").toLowerCase();
-          const operator = (tags.operator || "").toLowerCase();
-
-          if (name.includes("supercharger") || name.includes("ionity") || name.includes("fastned") || operator.includes("tesla")) {
-            return;
-          }
-
-          const distFromStart = getDistanceKm(currentPos.lat, currentPos.lng, lat, lon);
-          const distToTarget = getDistanceKm(lat, lon, targetPos.lat, targetPos.lng);
-          const progress = directDistToTarget - distToTarget;
-
-          // WICHTIG: Die Station muss uns dem Ziel nennenswert näherbringen (progress > 5km) 
-          // und im Reichweiten-Radius liegen, aber nicht das Ziel schon "überspringen"
-          if (distFromStart <= maxRangeKm && progress > 5 && distToTarget > 10) {
-            const score = distFromStart + (progress * 0.5);
-            if (score > highestProgress) {
-              highestProgress = score;
-              bestCharger = { lat: lat, lon: lon, name: tags.name || "Ladestation (Typ 2 / Schuko)", dist: distFromStart };
+            if (name.includes("supercharger") || name.includes("ionity") || name.includes("fastned") || operator.includes("tesla")) {
+              return;
             }
-          }
-        });
-        return bestCharger;
-      }
-    } catch(e) {}
+
+            const distFromStart = getDistanceKm(currentPos.lat, currentPos.lng, lat, lon);
+            const distToTarget = getDistanceKm(lat, lon, targetPos.lat, targetPos.lng);
+            const progress = directDistToTarget - distToTarget;
+
+            // Toleranterer Fortschrittsfilter, damit Langstrecken nicht abbrechen
+            if (distFromStart <= (maxRangeKm * 1.1) && progress > 2) {
+              const score = distFromStart + (progress * 0.5);
+              if (score > highestProgress) {
+                highestProgress = score;
+                bestCharger = { lat: lat, lon: lon, name: tags.name || "Ladestation (Typ 2 / Schuko)", dist: distFromStart };
+              }
+            }
+          });
+
+          if (bestCharger) return bestCharger;
+        }
+      } catch(e) {}
+      
+      // Falls erster Versuch fehlschlägt, Radius verdoppeln für den 2. Versuch
+      radiusMeters *= 2;
+    }
     return null;
   }
 
@@ -194,12 +200,16 @@
     const usableRangeKm = Math.round((MAX_RANGE_KM * Math.max(0, currentSoc - SAFETY_BUFFER_PCT)) / 100);
     let estimatedStops = totalStraightDist > usableRangeKm ? Math.ceil(totalStraightDist / usableRangeKm) - 1 : 0;
 
+    if (estimatedStops > 0) {
+      status.innerText = `ℹ️ Geschätzt: ~${estimatedStops} Ladestopp(s) nötig. Plane Kette...`;
+    }
+
     while (stopCounter < maxIterations) {
       const distToDest = getDistanceKm(currentPos.lat, currentPos.lng, destCoords.lat, destCoords.lng);
       const currentUsableRange = Math.round((MAX_RANGE_KM * Math.max(0, currentSoc - SAFETY_BUFFER_PCT)) / 100);
 
-      // Strengerer Check: Nur abbrechen, wenn das Ziel wirklich in einem Rutsch erreichbar ist
-      if (distToDest <= currentUsableRange * 0.85) {
+      // Nur abbrechen, wenn das Ziel wirklich in Reichweite ist UND wir keine Zwischenstopps mehr brauchen
+      if (distToDest <= currentUsableRange * 0.9) {
         routePoints.push({ lat: destCoords.lat, lng: destCoords.lng });
         break; 
       }
@@ -210,7 +220,7 @@
       const charger = await findChargerInRadius(currentPos, destCoords, currentUsableRange);
 
       if (!charger) {
-        status.innerText = `⚠️ Stopp ${stopCounter}: Keine weitere Ladesäule im Radius gefunden. Versuche Direkt-Reststrecke...`;
+        status.innerText = `⚠️ Stopp ${stopCounter}: Keine Ladesäule gefunden. Versuche Direkt-Reststrecke...`;
         stopCounter--;
         routePoints.push({ lat: destCoords.lat, lng: destCoords.lng });
         break;
