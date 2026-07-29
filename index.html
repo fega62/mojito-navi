@@ -214,6 +214,10 @@
       <label class="field-label" for="destInput">Ziel</label>
       <input type="text" id="destInput" placeholder="z. B. Interlaken, Schweiz">
     </div>
+    <div class="field">
+      <label class="field-label" for="speedInput">Ø Geschwindigkeit Überland (km/h)</label>
+      <input type="text" inputmode="numeric" id="speedInput" value="55" placeholder="55">
+    </div>
     <button class="primary" id="calcBtn" style="margin-top:16px;">Route berechnen</button>
     <div class="status" id="statusMsg"></div>
   </div>
@@ -257,6 +261,7 @@
   const chargeValue = document.getElementById('chargeValue');
   const startInput = document.getElementById('startInput');
   const destInput = document.getElementById('destInput');
+  const speedInput = document.getElementById('speedInput');
   const calcBtn = document.getElementById('calcBtn');
   const statusMsg = document.getElementById('statusMsg');
   const resultsCard = document.getElementById('resultsCard');
@@ -311,22 +316,16 @@
   }
 
   async function fetchRoute(start, dest){
-    const base = `https://router.project-osrm.org/route/v1/driving/${start.lon},${start.lat};${dest.lon},${dest.lat}`;
-    // Versuch 1: Autobahnen ausschliessen (falls vom Server unterstützt)
-    try{
-      const res = await fetch(`${base}?overview=full&geometries=geojson&steps=false&exclude=motorway`);
-      const data = await res.json();
-      if(data.code === 'Ok' && data.routes && data.routes.length){
-        return { route: data.routes[0], excludedMotorway: true };
-      }
-    }catch(e){ /* fall through */ }
-    // Fallback: normale Route (Autobahn-Ausschluss dann nur für Google Maps aktiv)
-    const res2 = await fetch(`${base}?overview=full&geometries=geojson&steps=false`);
-    const data2 = await res2.json();
-    if(data2.code !== 'Ok' || !data2.routes || !data2.routes.length){
+    // Velo-Profil: meidet Autobahnen zuverlässig und bevorzugt Neben-/Landstrassen,
+    // was der gewünschten Überland-Fahrweise des Motorrads sehr nahekommt.
+    // (Das Auto-Profil des OSRM-Demoservers ignoriert "exclude=motorway" in der Praxis.)
+    const url = `https://router.project-osrm.org/route/v1/cycling/${start.lon},${start.lat};${dest.lon},${dest.lat}?overview=full&geometries=geojson&steps=false`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if(data.code !== 'Ok' || !data.routes || !data.routes.length){
       throw new Error('Route konnte nicht berechnet werden');
     }
-    return { route: data2.routes[0], excludedMotorway: false };
+    return data.routes[0];
   }
 
   function haversine(lat1, lon1, lat2, lon2){
@@ -384,6 +383,7 @@
     const startQ = startInput.value.trim();
     const destQ = destInput.value.trim();
     const chargePct = parseInt(chargeSlider.value, 10);
+    const avgSpeed = parseFloat(speedInput.value.replace(',', '.'));
 
     if(!startQ || !destQ){
       setStatus('Bitte Start und Ziel angeben.', true);
@@ -391,6 +391,10 @@
     }
     if(chargePct <= 15){
       setStatus('Ladestand zu niedrig für eine Etappe — bitte vor Abfahrt laden.', true);
+      return;
+    }
+    if(!avgSpeed || avgSpeed <= 0){
+      setStatus('Bitte eine gültige Ø-Geschwindigkeit angeben.', true);
       return;
     }
 
@@ -406,9 +410,9 @@
       await sleep(1100);
 
       setStatus('Route wird berechnet…');
-      const { route, excludedMotorway } = await fetchRoute(startCoord, destCoord);
+      const route = await fetchRoute(startCoord, destCoord);
       const totalKm = route.distance / 1000;
-      const driveMin = route.duration / 60;
+      const driveMin = (totalKm / avgSpeed) * 60; // eigene Fahrzeit, nicht das Velo-Tempo aus dem Routing
       const coords = route.geometry.coordinates; // [lon,lat]
 
       const legs = planLegs(totalKm, chargePct);
@@ -439,12 +443,6 @@
       document.getElementById('sumTotal').textContent = fmtMin(totalMin);
 
       warnBox.innerHTML = '';
-      if(!excludedMotorway){
-        const w = document.createElement('div');
-        w.className = 'warn-box';
-        w.textContent = 'Hinweis: Die Schätzung basiert hier auf einer Route inkl. Autobahnen (Routing-Server hat den Ausschluss nicht unterstützt). Die Google-Maps-Route wird trotzdem mit „Autobahnen vermeiden“ geöffnet — Distanz/Zeit können dort leicht abweichen.';
-        warnBox.appendChild(w);
-      }
 
       // --- UI: Tripbar ---
       const track = document.getElementById('tripbarTrack');
@@ -513,7 +511,7 @@
       list.appendChild(endLi);
 
       document.getElementById('routeSourceNote').innerHTML =
-        `<b>Annahmen:</b> 60 km Reichweite bei 100%, Ladestopps bei 15% Restkapazität, Nachladen bis 85%, Vollladung 2.5 h (linear angenommen). Orte via OpenStreetMap, Ladepunkte via Open Charge Map — bitte vor Abfahrt Verfügbarkeit/Stecker­typ prüfen.`;
+        `<b>Annahmen:</b> 60 km Reichweite bei 100%, Ladestopps bei 15% Restkapazität, Nachladen bis 85%, Vollladung 2.5 h (linear angenommen), Fahrzeit mit ${avgSpeed} km/h Ø-Tempo. Die Streckenführung nutzt ein Velo-Routing (meidet Autobahnen zuverlässig, bevorzugt Neben-/Landstrassen) — vereinzelt können dabei reine Radwege vorgeschlagen werden, die fürs Motorrad nicht zulässig sind. Orte via OpenStreetMap, Ladepunkte via Open Charge Map — bitte vor Abfahrt Verfügbarkeit/Steckertyp sowie die effektive Streckenführung in Google Maps prüfen.`;
 
       resultsCard.classList.remove('hidden');
       mapsCard.classList.remove('hidden');
