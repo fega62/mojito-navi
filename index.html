@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Mojito Smart Navi</title>
+  <title>Mojito Multi-Stop Navi</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: sans-serif; }
     body { background-color: #121212; color: #ffffff; padding: 20px; display: flex; flex-direction: column; min-height: 100vh; gap: 16px; }
@@ -136,7 +136,9 @@
           const distToTarget = getDistanceKm(lat, lon, targetPos.lat, targetPos.lng);
           const progress = directDistToTarget - distToTarget;
 
-          if (distFromStart <= maxRangeKm && progress > 0) {
+          // WICHTIG: Die Station muss uns dem Ziel nennenswert näherbringen (progress > 5km) 
+          // und im Reichweiten-Radius liegen, aber nicht das Ziel schon "überspringen"
+          if (distFromStart <= maxRangeKm && progress > 5 && distToTarget > 10) {
             const score = distFromStart + (progress * 0.5);
             if (score > highestProgress) {
               highestProgress = score;
@@ -178,33 +180,26 @@
     let currentSoc = parseFloat(document.getElementById('soc-slider').value);
     let currentPos = { lat: startCoords.lat, lng: startCoords.lng };
     
-    const usableRangeKm = Math.round((MAX_RANGE_KM * Math.max(0, currentSoc - SAFETY_BUFFER_PCT)) / 100);
-    const totalStraightDist = getDistanceKm(startCoords.lat, startCoords.lng, destCoords.lat, destCoords.lng);
-
-    // VORAB-ABSCHÄTZUNG DER STOPPS
-    let estimatedStops = 0;
-    if (totalStraightDist > usableRangeKm * 0.9) {
-      estimatedStops = Math.max(1, Math.ceil(totalStraightDist / usableRangeKm) - 1);
-    }
-
-    if (estimatedStops > 0) {
-      status.innerText = `ℹ️ Geschätzt: ~${estimatedStops} Ladestopp(s) nötig. Suche Punkte...`;
-    }
-
     const waypoints = [];
     const stopsSummary = [];
     const routePoints = [{ lat: startCoords.lat, lng: startCoords.lng }];
     let totalChargeTimeMin = 0;
     let stopCounter = 0;
+    const maxIterations = 15;
 
     summaryCard.style.display = "none";
     mapsBtn.style.display = "none";
 
-    while (stopCounter < 15) {
+    const totalStraightDist = getDistanceKm(startCoords.lat, startCoords.lng, destCoords.lat, destCoords.lng);
+    const usableRangeKm = Math.round((MAX_RANGE_KM * Math.max(0, currentSoc - SAFETY_BUFFER_PCT)) / 100);
+    let estimatedStops = totalStraightDist > usableRangeKm ? Math.ceil(totalStraightDist / usableRangeKm) - 1 : 0;
+
+    while (stopCounter < maxIterations) {
       const distToDest = getDistanceKm(currentPos.lat, currentPos.lng, destCoords.lat, destCoords.lng);
       const currentUsableRange = Math.round((MAX_RANGE_KM * Math.max(0, currentSoc - SAFETY_BUFFER_PCT)) / 100);
 
-      if (distToDest <= currentUsableRange * 0.9) {
+      // Strengerer Check: Nur abbrechen, wenn das Ziel wirklich in einem Rutsch erreichbar ist
+      if (distToDest <= currentUsableRange * 0.85) {
         routePoints.push({ lat: destCoords.lat, lng: destCoords.lng });
         break; 
       }
@@ -215,7 +210,7 @@
       const charger = await findChargerInRadius(currentPos, destCoords, currentUsableRange);
 
       if (!charger) {
-        status.innerText = `⚠️ Stopp ${stopCounter}: Keine Ladesäule gefunden. Versuche Direkt-Reststrecke...`;
+        status.innerText = `⚠️ Stopp ${stopCounter}: Keine weitere Ladesäule im Radius gefunden. Versuche Direkt-Reststrecke...`;
         stopCounter--;
         routePoints.push({ lat: destCoords.lat, lng: destCoords.lng });
         break;
