@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Mojito Multi-Stop Navi</title>
+  <title>Mojito Smart Navi</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: sans-serif; }
     body { background-color: #121212; color: #ffffff; padding: 20px; display: flex; flex-direction: column; min-height: 100vh; gap: 16px; }
@@ -48,7 +48,7 @@
 
   <div class="status-msg" id="status-msg">Bereit für Routenplanung</div>
 
-  <button class="btn btn-green" id="plan-btn" onclick="planMultiStopRoute()">
+  <button class="btn btn-green" id="plan-btn" onclick="planSmartRoute()">
     🔍 Route & Ladezeiten berechnen
   </button>
 
@@ -98,63 +98,56 @@
     return null;
   }
 
-  async function findChargerInRadius(currentPos, targetPos, maxRangeKm) {
-    // Wenn im normalen Radius nichts gefunden wird, dehnen wir den Suchbereich dynamisch aus (bis zu 15km)
-    let radiusMeters = Math.max(maxRangeKm * 1000, 8000);
+  async function findBestCharger(currentPos, targetPos, maxRangeKm) {
+    // Sehr großzügiger Radius, um absolut sicher eine Ladesäule zu finden
+    let radiusMeters = Math.max(maxRangeKm * 1000, 15000);
+    const query = `
+      [out:json];
+      (
+        node["amenity"="charging_station"](around:${radiusMeters},${currentPos.lat},${currentPos.lng});
+        way["amenity"="charging_station"](around:${radiusMeters},${currentPos.lat},${currentPos.lng});
+      );
+      out center 100;
+    `;
     
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      const query = `
-        [out:json];
-        (
-          node["amenity"="charging_station"](around:${radiusMeters},${currentPos.lat},${currentPos.lng});
-          way["amenity"="charging_station"](around:${radiusMeters},${currentPos.lat},${currentPos.lng});
-        );
-        out center 60;
-      `;
-      
-      try {
-        const res = await fetch("https://overpass-api.de/api/interpreter", { method: "POST", body: query });
-        const data = await res.json();
+    try {
+      const res = await fetch("https://overpass-api.de/api/interpreter", { method: "POST", body: query });
+      const data = await res.json();
 
-        if (data.elements && data.elements.length > 0) {
-          let bestCharger = null;
-          let highestProgress = -999999;
-          const directDistToTarget = getDistanceKm(currentPos.lat, currentPos.lng, targetPos.lat, targetPos.lng);
+      if (data.elements && data.elements.length > 0) {
+        let bestCharger = null;
+        let bestScore = -999999;
+        const directDistToTarget = getDistanceKm(currentPos.lat, currentPos.lng, targetPos.lat, targetPos.lng);
 
-          data.elements.forEach(element => {
-            const lat = element.lat || (element.center && element.center.lat);
-            const lon = element.lon || (element.center && element.center.lon);
-            if (!lat || !lon) return;
+        data.elements.forEach(element => {
+          const lat = element.lat || (element.center && element.center.lat);
+          const lon = element.lon || (element.center && element.center.lon);
+          if (!lat || !lon) return;
 
-            const tags = element.tags || {};
-            const name = (tags.name || "").toLowerCase();
-            const operator = (tags.operator || "").toLowerCase();
+          const tags = element.tags || {};
+          const name = (tags.name || "").toLowerCase();
+          const operator = (tags.operator || "").toLowerCase();
 
-            if (name.includes("supercharger") || name.includes("ionity") || name.includes("fastned") || operator.includes("tesla")) {
-              return;
+          if (name.includes("supercharger") || name.includes("ionity") || name.includes("fastned") || operator.includes("tesla")) {
+            return;
+          }
+
+          const distFromStart = getDistanceKm(currentPos.lat, currentPos.lng, lat, lon);
+          const distToTarget = getDistanceKm(lat, lon, targetPos.lat, targetPos.lng);
+          const progress = directDistToTarget - distToTarget;
+
+          // Wähle eine Station, die im Reichweiten-Fenster liegt und das Ziel optimal annähert
+          if (distFromStart <= maxRangeKm && distFromStart >= (maxRangeKm * 0.4) && progress > 0) {
+            const score = progress - Math.abs(distFromStart - (maxRangeKm * 0.8)); // Bevorzuge Stationen gegen Ende der Reichweite
+            if (score > bestScore) {
+              bestScore = score;
+              bestCharger = { lat: lat, lon: lon, name: tags.name || "Ladestation (Typ 2 / Schuko)", dist: distFromStart };
             }
-
-            const distFromStart = getDistanceKm(currentPos.lat, currentPos.lng, lat, lon);
-            const distToTarget = getDistanceKm(lat, lon, targetPos.lat, targetPos.lng);
-            const progress = directDistToTarget - distToTarget;
-
-            // Toleranterer Fortschrittsfilter, damit Langstrecken nicht abbrechen
-            if (distFromStart <= (maxRangeKm * 1.1) && progress > 2) {
-              const score = distFromStart + (progress * 0.5);
-              if (score > highestProgress) {
-                highestProgress = score;
-                bestCharger = { lat: lat, lon: lon, name: tags.name || "Ladestation (Typ 2 / Schuko)", dist: distFromStart };
-              }
-            }
-          });
-
-          if (bestCharger) return bestCharger;
-        }
-      } catch(e) {}
-      
-      // Falls erster Versuch fehlschlägt, Radius verdoppeln für den 2. Versuch
-      radiusMeters *= 2;
-    }
+          }
+        });
+        return bestCharger;
+      }
+    } catch(e) {}
     return null;
   }
 
@@ -168,7 +161,7 @@
     return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
   }
 
-  async function planMultiStopRoute() {
+  async function planSmartRoute() {
     const destText = document.getElementById('destination-input').value.trim();
     const status = document.getElementById('status-msg');
     const summaryCard = document.getElementById('summary-card');
@@ -177,122 +170,76 @@
 
     if (!destText) { alert("Bitte gib ein Ziel ein!"); return; }
 
-    status.innerText = "📍 Ermittle Standort & Ziel-Koordinaten...";
+    status.innerText = "📍 Ermittle Standort & Ziel...";
     const startCoords = await getCurrentLocation();
     const destCoords = await geocodeDestination(destText);
 
     if (!startCoords || !destCoords) { alert("GPS oder Zielort konnte nicht aufgelöst werden!"); return; }
 
     let currentSoc = parseFloat(document.getElementById('soc-slider').value);
-    let currentPos = { lat: startCoords.lat, lng: startCoords.lng };
-    
-    const waypoints = [];
-    const stopsSummary = [];
-    const routePoints = [{ lat: startCoords.lat, lng: startCoords.lng }];
-    let totalChargeTimeMin = 0;
-    let stopCounter = 0;
-    const maxIterations = 15;
+    const usableRangeKm = Math.round((MAX_RANGE_KM * Math.max(0, currentSoc - SAFETY_BUFFER_PCT)) / 100);
+    const totalStraightDist = getDistanceKm(startCoords.lat, startCoords.lng, destCoords.lat, destCoords.lng);
 
     summaryCard.style.display = "none";
     mapsBtn.style.display = "none";
 
-    const totalStraightDist = getDistanceKm(startCoords.lat, startCoords.lng, destCoords.lat, destCoords.lng);
-    const usableRangeKm = Math.round((MAX_RANGE_KM * Math.max(0, currentSoc - SAFETY_BUFFER_PCT)) / 100);
-    let estimatedStops = totalStraightDist > usableRangeKm ? Math.ceil(totalStraightDist / usableRangeKm) - 1 : 0;
-
-    if (estimatedStops > 0) {
-      status.innerText = `ℹ️ Geschätzt: ~${estimatedStops} Ladestopp(s) nötig. Plane Kette...`;
+    // Prüfen, ob Ziel direkt erreichbar
+    if (totalStraightDist <= usableRangeKm * 0.9) {
+      status.innerText = "✅ Ziel direkt erreichbar!";
+      generatedMapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${startCoords.lat},${startCoords.lng}&destination=${encodeURIComponent(destText)}&travelmode=two-wheeler`;
+      
+      summaryContent.innerHTML = `<div><strong>Distanz:</strong> ~${Math.round(totalStraightDist)} km</div><div style="color: #00ff7f; margin-top: 5px;">Kein Ladestopp erforderlich.</div>`;
+      summaryCard.style.display = "flex";
+      mapsBtn.style.display = "flex";
+      return;
     }
 
-    while (stopCounter < maxIterations) {
-      const distToDest = getDistanceKm(currentPos.lat, currentPos.lng, destCoords.lat, destCoords.lng);
-      const currentUsableRange = Math.round((MAX_RANGE_KM * Math.max(0, currentSoc - SAFETY_BUFFER_PCT)) / 100);
+    status.innerText = "🔄 Suche optimalen ersten Ladestopp...";
+    const charger = await findChargerInRadius(startCoords, destCoords, usableRangeKm);
 
-      // Nur abbrechen, wenn das Ziel wirklich in Reichweite ist UND wir keine Zwischenstopps mehr brauchen
-      if (distToDest <= currentUsableRange * 0.9) {
-        routePoints.push({ lat: destCoords.lat, lng: destCoords.lng });
-        break; 
-      }
-
-      stopCounter++;
-      status.innerText = `🔄 Berechne Ladestopp ${stopCounter} (von ~${estimatedStops})...`;
-
-      const charger = await findChargerInRadius(currentPos, destCoords, currentUsableRange);
-
-      if (!charger) {
-        status.innerText = `⚠️ Stopp ${stopCounter}: Keine Ladesäule gefunden. Versuche Direkt-Reststrecke...`;
-        stopCounter--;
-        routePoints.push({ lat: destCoords.lat, lng: destCoords.lng });
-        break;
-      }
-
-      const usedPct = (charger.dist / MAX_RANGE_KM) * 100;
-      const arrivalSoc = Math.max(0, currentSoc - usedPct);
-      const targetChargeSoc = 85; 
-      const chargeNeededPct = Math.max(0, targetChargeSoc - arrivalSoc);
-      const chargeTimeMin = Math.round(chargeNeededPct * CHARGE_RATE_MIN_PER_PCT);
-
-      totalChargeTimeMin += chargeTimeMin;
-
-      waypoints.push(`${charger.lat},${charger.lon}`);
-      routePoints.push({ lat: charger.lat, lng: charger.lon });
-
-      stopsSummary.push({
-        num: stopCounter,
-        name: charger.name,
-        dist: Math.round(charger.dist),
-        arrSoc: Math.round(arrivalSoc),
-        chargeTime: chargeTimeMin
-      });
-
-      currentPos = { lat: charger.lat, lng: charger.lon };
-      currentSoc = targetChargeSoc; 
+    if (!charger) {
+      status.innerText = "⚠️ Keine Ladesäule gefunden. Öffne Standardroute...";
+      setTimeout(() => {
+        window.location.href = `https://www.google.com/maps/dir/?api=1&origin=${startCoords.lat},${startCoords.lng}&destination=${encodeURIComponent(destText)}&travelmode=two-wheeler`;
+      }, 1500);
+      return;
     }
 
-    if (routePoints[routePoints.length - 1].lat !== destCoords.lat) {
-      routePoints.push({ lat: destCoords.lat, lng: destCoords.lng });
-    }
+    const usedPct = (charger.dist / MAX_RANGE_KM) * 100;
+    const arrivalSoc = Math.max(0, currentSoc - usedPct);
+    const chargeNeededPct = Math.max(0, 85 - arrivalSoc);
+    const chargeTimeMin = Math.round(chargeNeededPct * CHARGE_RATE_MIN_PER_PCT);
 
-    let totalDistKm = 0;
-    for (let i = 0; i < routePoints.length - 1; i++) {
-      totalDistKm += getDistanceKm(routePoints[i].lat, routePoints[i].lng, routePoints[i+1].lat, routePoints[i+1].lng);
-    }
-
+    // Gesamtdaten schätzen (Fahrt bis Stopp + Rest zum Ziel über Google Maps)
+    const totalDistKm = totalStraightDist * 1.2; // Faktor für Straßenkrümmung
     const driveTimeMin = Math.round((totalDistKm / AVG_SPEED_KMH) * 60);
-    const totalTripTimeMin = driveTimeMin + totalChargeTimeMin;
+    const totalTripTimeMin = driveTimeMin + chargeTimeMin;
 
     const driveHours = Math.floor(driveTimeMin / 60);
     const driveMins = driveTimeMin % 60;
-    const chargeHours = Math.floor(totalChargeTimeMin / 60);
-    const chargeMins = totalChargeTimeMin % 60;
+    const chargeHours = Math.floor(chargeTimeMin / 60);
+    const chargeMins = chargeTimeMin % 60;
     const totalHours = Math.floor(totalTripTimeMin / 60);
     const totalMins = totalTripTimeMin % 60;
 
-    generatedMapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${startCoords.lat},${startCoords.lng}&destination=${encodeURIComponent(destText)}&travelmode=two-wheeler`;
-    if (waypoints.length > 0) {
-      generatedMapsUrl += `&waypoints=${waypoints.join('|')}`;
-    }
+    // Google Maps URL mit dem ersten Ladestopp als Wegpunkt
+    generatedMapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${startCoords.lat},${startCoords.lng}&destination=${encodeURIComponent(destText)}&waypoints=${charger.lat},${charger.lon}&travelmode=two-wheeler`;
 
-    let html = `<div><strong>Gesamtdistanz:</strong> ~${Math.round(totalDistKm)} km</div>`;
+    let html = `<div><strong>Gesamtdistanz (geschätzt):</strong> ~${Math.round(totalDistKm)} km</div>`;
     html += `<div><strong>Gesamtdauer:</strong> ~${totalHours}h ${totalMins}m</div>`;
-    html += `<div style="color: #aaa; font-size: 0.85rem; margin-bottom: 8px;">(🛵 Fahrt: ${driveHours}h ${driveMins}m | 🔌 Laden: ${chargeHours}h ${chargeMins}m)</div>`;
+    html += `<div style="color: #aaa; font-size: 0.85rem; margin-bottom: 8px;">(🛵 Fahrt: ${driveHours}h ${driveMins}m | 🔌 1. Laden: ${chargeHours}h ${chargeMins}m)</div>`;
     
-    if (stopsSummary.length > 0) {
-      html += `<div style="font-weight: bold; margin-top: 6px;">Geplante Ladestopps (${stopsSummary.length}):</div>`;
-      stopsSummary.forEach(s => {
-        html += `<div class="stop-item">`;
-        html += `<strong>Stopp ${s.num}:</strong> ${s.name} (nach ~${s.dist} km)<br>`;
-        html += `Ankunft mit ~${s.arrSoc}% Akku ➔ <strong>${s.chargeTime} Min. laden</strong> (auf 85%)`;
-        html += `</div>`;
-      });
-    } else {
-      html += `<div style="margin-top: 8px; color: #00ff7f; font-weight: bold;">Kein Ladestopp erforderlich! Direktziel erreichbar.</div>`;
-    }
+    html += `<div style="font-weight: bold; margin-top: 6px;">Erster geplanter Ladestopp:</div>`;
+    html += `<div class="stop-item">`;
+    html += `<strong>Stopp 1:</strong> ${charger.name} (nach ~${Math.round(charger.dist)} km)<br>`;
+    html += `Ankunft mit ~${Math.round(arrivalSoc)}% Akku ➔ <strong>${chargeTimeMin} Min. laden</strong> (auf 85% సాహిత్య)<br>`;
+    html += `<span style="font-size: 0.8rem; color: #aaa;">Hinweis: Nächste Stopps können danach in Maps oder per Neustart der App geplant werden.</span>`;
+    html += `</div>`;
 
     summaryContent.innerHTML = html;
     summaryCard.style.display = "flex";
     mapsBtn.style.display = "flex";
-    status.innerText = "✅ Routen- und Ladeplanung erfolgreich abgeschlossen!";
+    status.innerText = "✅ Erster Ladestopp erfolgreich berechnet!";
   }
 
   function startGoogleMaps() {
