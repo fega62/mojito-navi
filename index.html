@@ -43,7 +43,7 @@
 
   <div class="input-card">
     <label for="destination-input">ZIELORT:</label>
-    <input type="text" id="destination-input" placeholder="z. B. Zürich HB">
+    <input type="text" id="destination-input" placeholder="z. B. Paris Centre">
   </div>
 
   <div class="status-msg" id="status-msg">Bereit für Mehrstopp-Berechnung</div>
@@ -52,12 +52,10 @@
     🔍 Route & Ladezeiten berechnen
   </button>
 
-  <!-- ERGEBNIS-ZUSAMMENFASSUNG -->
   <div class="summary-card" id="summary-card">
     <div class="summary-title">📊 Routen-Zusammenfassung</div>
     <div id="summary-content"></div>
     
-    <!-- MANUELLER BUTTON FÜR GOOGLE MAPS -->
     <button class="btn btn-maps" id="maps-btn" onclick="startGoogleMaps()">
       🗺️ Google Maps Navigation starten
     </button>
@@ -117,7 +115,9 @@
 
       if (data.elements && data.elements.length > 0) {
         let bestCharger = null;
-        let lowestDetourScore = 999999;
+        let highestProgress = -999999;
+
+        const directDistToTarget = getDistanceKm(currentPos.lat, currentPos.lng, targetPos.lat, targetPos.lng);
 
         data.elements.forEach(element => {
           const lat = element.lat || (element.center && element.center.lat);
@@ -134,12 +134,16 @@
 
           const distFromStart = getDistanceKm(currentPos.lat, currentPos.lng, lat, lon);
           const distToTarget = getDistanceKm(lat, lon, targetPos.lat, targetPos.lng);
-          const directDist = getDistanceKm(currentPos.lat, currentPos.lng, targetPos.lat, targetPos.lng);
-          const detour = (distFromStart + distToTarget) - directDist;
+          
+            // Fortschritt: Wie viel näher bringt uns dieser Stopp ans Ziel im Vergleich zur aktuellen Position?
+          const progress = directDistToTarget - distToTarget;
 
-          if (distFromStart <= maxRangeKm && distToTarget < directDist) {
-            if (detour < lowestDetourScore) {
-              lowestDetourScore = detour;
+          // Bedingungen: Innerhalb Reichweite + bringt uns dem Ziel näher (progress > 0)
+          if (distFromStart <= maxRangeKm && progress > 0) {
+            // Bevorzuge Stationen, die möglichst weit vorne in Richtung Ziel liegen (nahe an maxRange)
+            const score = distFromStart + (progress * 0.5);
+            if (score > highestProgress) {
+              highestProgress = score;
               bestCharger = { lat: lat, lon: lon, name: tags.name || "Typ 2 Station", dist: distFromStart };
             }
           }
@@ -183,7 +187,7 @@
     const routePoints = [{ lat: startCoords.lat, lng: startCoords.lng }];
     let totalChargeTimeMin = 0;
     let iterations = 0;
-    const maxIterations = 5;
+    const maxIterations = 8; // Erhöht für Langstrecken wie Paris
 
     summaryCard.style.display = "none";
     mapsBtn.style.display = "none";
@@ -193,19 +197,18 @@
       const distToDest = getDistanceKm(currentPos.lat, currentPos.lng, destCoords.lat, destCoords.lng);
       const usableRangeKm = Math.round((MAX_RANGE_KM * Math.max(0, currentSoc - SAFETY_BUFFER_PCT)) / 100);
 
-      // Prüfen, ob das Ziel direkt erreichbar ist
+      // KORREKTUR: Kann das Ziel direkt von der AKTUELLEN Position mit dem AKTUELLEN Akku erreicht werden?
       if (distToDest <= usableRangeKm * 0.9) {
         routePoints.push({ lat: destCoords.lat, lng: destCoords.lng });
         break; 
       }
 
-      status.innerText = `🔄 Suche Ladestopp ${iterations} (Restakku: ${Math.round(currentSoc)}%)...`;
+      status.innerText = `🔄 Suche Ladestopp ${iterations} (Restakku: ${Math.round(currentSoc)}% / Reichweite: ${usableRangeKm} km)...`;
 
       const charger = await findChargerInRadius(currentPos, destCoords, usableRangeKm);
 
       if (!charger) {
-        status.innerText = `⚠️ Kein weiterer Stopp gefunden. Plane Reststrecke...`;
-        routePoints.push({ lat: destCoords.lat, lng: destCoords.lng });
+        status.innerText = `⚠️ Abbruch bei Stopp ${iterations}: Keine weitere Ladesäule auf dieser Teilstrecke gefunden!`;
         break;
       }
 
@@ -232,6 +235,11 @@
       currentSoc = targetChargeSoc; 
     }
 
+    // Falls das Ziel nach max. Iterationen immer noch nicht erreicht wurde, hängen wir das Ziel trotzdem als Endpunkt an
+    if (routePoints[routePoints.length - 1].lat !== destCoords.lat) {
+      routePoints.push({ lat: destCoords.lat, lng: destCoords.lng });
+    }
+
     // Exakte Gesamtdistanz über alle Wegpunkte aufsummieren
     let totalDistKm = 0;
     for (let i = 0; i < routePoints.length - 1; i++) {
@@ -248,13 +256,11 @@
     const totalHours = Math.floor(totalTripTimeMin / 60);
     const totalMins = totalTripTimeMin % 60;
 
-    // Google Maps Link erzeugen
     generatedMapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${startCoords.lat},${startCoords.lng}&destination=${encodeURIComponent(destText)}&travelmode=two-wheeler`;
     if (waypoints.length > 0) {
       generatedMapsUrl += `&waypoints=${waypoints.join('|')}`;
     }
 
-    // Ergebnis im UI aufbauen
     let html = `<div><strong>Gesamtdistanz:</strong> ~${Math.round(totalDistKm)} km</div>`;
     html += `<div><strong>Gesamtdauer:</strong> ~${totalHours}h ${totalMins}m</div>`;
     html += `<div style="color: #aaa; font-size: 0.85rem; margin-bottom: 8px;">(🛵 Fahrt: ${driveHours}h ${driveMins}m | 🔌 Laden: ${chargeHours}h ${chargeMins}m)</div>`;
@@ -274,7 +280,7 @@
     summaryContent.innerHTML = html;
     summaryCard.style.display = "flex";
     mapsBtn.style.display = "flex";
-    status.innerText = "✅ Berechnung abgeschlossen!";
+    status.innerText = "✅ Berechnung erfolgreich abgeschlossen!";
   }
 
   function startGoogleMaps() {
