@@ -209,6 +209,8 @@
     <div class="field">
       <label class="field-label" for="startInput">Start</label>
       <input type="text" id="startInput" placeholder="z. B. Basel, Schweiz">
+      <button type="button" class="secondary" id="useLocationBtn" style="margin-top:8px;">📍 Aktuelle Position verwenden</button>
+      <div class="status" id="locationStatus"></div>
     </div>
     <div class="field">
       <label class="field-label" for="destInput">Ziel</label>
@@ -220,6 +222,15 @@
     </div>
     <button class="primary" id="calcBtn" style="margin-top:16px;">Route berechnen</button>
     <div class="status" id="statusMsg"></div>
+  </div>
+
+  <div class="card" id="settingsCard">
+    <h2>⚙ Ladepunkt-Suche</h2>
+    <div class="field">
+      <label class="field-label" for="ocmKeyInput">Open Charge Map API-Key</label>
+      <input type="text" id="ocmKeyInput" placeholder="kostenlos auf openchargemap.org">
+    </div>
+    <div class="note" style="margin-top:0;">Open Charge Map verlangt seit Kurzem einen kostenlosen API-Key für Abfragen. Ohne Key findet die App keine echten Ladestationen. Key erstellen: <a href="https://map.openchargemap.io/" target="_blank" rel="noopener" style="color:var(--volt);">map.openchargemap.io</a> → Profil/Anmelden → API-Key. Der Key wird nur lokal in diesem Browser gespeichert.</div>
   </div>
 
   <div class="card hidden" id="resultsCard">
@@ -245,7 +256,8 @@
   <div class="card hidden" id="mapsCard">
     <h2>04 &middot; Navigation</h2>
     <button class="secondary" id="mapsBtn">↗ Route in Google Maps öffnen</button>
-    <div class="note"><b>Hinweis:</b> Google Maps wird mit „Autobahnen vermeiden“ geöffnet. Die vorgeschlagenen Ladestopps sind als Wegpunkte gesetzt &mdash; bitte den genauen Ladepunkt vor Ort/an der Station final prüfen.</div>
+    <div class="note"><b>Hinweis:</b> Google Maps wird mit „Autobahnen vermeiden“ geöffnet. Das ist bei Google nur eine weiche Präferenz — bei kurzen, kaum vermeidbaren Teilstücken (z. B. Zubringer) kann Maps trotzdem minimal Autobahn nutzen. Die Wegpunkte zeigen wo möglich auf die exakte Koordinate der empfohlenen Ladestation &mdash; bitte trotzdem Verfügbarkeit/Steckertyp vor Ort final prüfen.</div>
+    <div class="warn-box hidden" id="mapsGeometryWarn">Hinweis: Für einen oder mehrere Ladestopps wurde keine passende Station gefunden — dort wird stattdessen ein ungefährer Streckenpunkt als Wegpunkt verwendet.</div>
   </div>
 
 </div>
@@ -262,18 +274,30 @@
   const startInput = document.getElementById('startInput');
   const destInput = document.getElementById('destInput');
   const speedInput = document.getElementById('speedInput');
+  const ocmKeyInput = document.getElementById('ocmKeyInput');
+
+  const DEFAULT_OCM_KEY = '1c3f7288-ede2-4758-85ce-ac56a77c4155';
+  ocmKeyInput.value = localStorage.getItem('mojito_ocm_key') || DEFAULT_OCM_KEY;
+  ocmKeyInput.addEventListener('change', () => {
+    localStorage.setItem('mojito_ocm_key', ocmKeyInput.value.trim());
+  });
   const calcBtn = document.getElementById('calcBtn');
   const statusMsg = document.getElementById('statusMsg');
   const resultsCard = document.getElementById('resultsCard');
   const mapsCard = document.getElementById('mapsCard');
   const mapsBtn = document.getElementById('mapsBtn');
   const warnBox = document.getElementById('warnBox');
+  const useLocationBtn = document.getElementById('useLocationBtn');
+  const locationStatus = document.getElementById('locationStatus');
 
   chargeSlider.addEventListener('input', () => {
     chargeValue.innerHTML = chargeSlider.value + '<span style="font-size:16px;color:var(--text-dim);">%</span>';
   });
 
   let tripState = null; // holds coords for maps handoff
+  let manualStartCoord = null; // gesetzt, wenn "Aktuelle Position" verwendet wurde
+
+  startInput.addEventListener('input', () => { manualStartCoord = null; });
 
   function setStatus(msg, isErr){
     statusMsg.textContent = msg || '';
@@ -281,6 +305,39 @@
   }
 
   function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
+
+  useLocationBtn.addEventListener('click', () => {
+    if(!navigator.geolocation){
+      locationStatus.textContent = 'Geolokalisierung wird von diesem Browser nicht unterstützt.';
+      locationStatus.classList.add('err');
+      return;
+    }
+    locationStatus.classList.remove('err');
+    locationStatus.textContent = 'Position wird ermittelt…';
+    useLocationBtn.disabled = true;
+
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const { latitude: lat, longitude: lon } = pos.coords;
+        manualStartCoord = { lat, lon };
+        const place = await reverseGeocode(lat, lon);
+        startInput.value = place ? `Aktuelle Position (${place})` : `Aktuelle Position (${lat.toFixed(4)}, ${lon.toFixed(4)})`;
+        locationStatus.textContent = 'Position übernommen.';
+        useLocationBtn.disabled = false;
+      },
+      (err) => {
+        const messages = {
+          1: 'Standortzugriff wurde verweigert. Bitte manuell eingeben oder Berechtigung erteilen.',
+          2: 'Position konnte nicht ermittelt werden.',
+          3: 'Zeitüberschreitung bei der Positionsbestimmung.'
+        };
+        locationStatus.textContent = messages[err.code] || 'Standort konnte nicht ermittelt werden.';
+        locationStatus.classList.add('err');
+        useLocationBtn.disabled = false;
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  });
 
   async function geocode(query){
     const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`;
@@ -293,26 +350,71 @@
 
   async function reverseGeocode(lat, lon){
     try{
-      const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=13`;
+      const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=14&addressdetails=1`;
       const res = await fetch(url, { headers: { 'Accept-Language': 'de' } });
       if(!res.ok) return null;
       const data = await res.json();
       const a = data.address || {};
-      const place = a.town || a.city || a.village || a.municipality || a.suburb || a.county;
-      return place || (data.display_name ? data.display_name.split(',')[0] : null);
+      // Nur echte Ortsnamen verwenden — NIE auf eine einzelne Hausadresse zurückfallen,
+      // sonst sieht die Beschriftung wie eine konkrete (falsche) Lade-Adresse aus.
+      return a.town || a.city || a.village || a.municipality || a.hamlet || a.suburb || a.county || null;
     }catch(e){ return null; }
   }
 
-  async function findCharger(lat, lon){
+  function isMotorwayService(text){
+    if(!text) return false;
+    return /autobahn|raststätte|rastst|rastplatz|aire d|aire de|service area|autogrill|autoroute|autobahnraststätte|rest area|rest stop/i.test(text);
+  }
+
+  function hasCompatibleConnector(poi){
+    const conns = poi.Connections || [];
+    if(!conns.length) return true; // unbekannt -> nicht vorschnell ausschliessen
+    return conns.some(c => {
+      const title = (c.ConnectionType && c.ConnectionType.Title) || '';
+      const isSchuko = /schuko|domestic|household|cee 7/i.test(title);
+      const isType2 = /type\s*2|typ\s*2|iec\s*62196/i.test(title) && !/ccs|combo/i.test(title);
+      return isSchuko || isType2;
+    });
+  }
+
+  function isPubliclyUsable(poi){
+    const usage = (poi.UsageType && poi.UsageType.Title) || '';
+    if(/private/i.test(usage)) return false; // OCM enthält viele private Wallboxen, die fälschlich als POI gelistet sind
+    const status = poi.StatusType;
+    if(status && status.IsOperational === false) return false;
+    return true;
+  }
+
+  async function findCharger(lat, lon, apiKey){
     try{
-      const url = `https://api.openchargemap.io/v3/poi/?output=json&latitude=${lat}&longitude=${lon}&distance=10&distanceunit=KM&maxresults=1&compact=true&verbose=false`;
-      const res = await fetch(url);
-      if(!res.ok) return null;
+      let url = `https://api.openchargemap.io/v3/poi/?output=json&latitude=${lat}&longitude=${lon}&distance=15&distanceunit=KM&maxresults=15&compact=false&verbose=false`;
+      if(apiKey) url += `&key=${encodeURIComponent(apiKey)}`;
+      const res = await fetch(url, apiKey ? { headers: { 'X-API-Key': apiKey } } : {});
+      if(res.status === 401 || res.status === 403) return { status: 'auth' };
+      if(!res.ok) return { status: 'error' };
       const data = await res.json();
-      if(!data.length) return null;
-      const info = data[0].AddressInfo || {};
-      return info.Title ? `${info.Title}${info.Town ? ', ' + info.Town : ''}` : null;
-    }catch(e){ return null; }
+      if(!data.length) return { status: 'none' };
+
+      const suitable = data
+        .filter(poi => {
+          const a = poi.AddressInfo || {};
+          const text = `${a.Title || ''} ${a.AddressLine1 || ''} ${a.AddressLine2 || ''}`;
+          return !isMotorwayService(text) && hasCompatibleConnector(poi) && isPubliclyUsable(poi);
+        })
+        .sort((a,b) => (a.AddressInfo?.Distance ?? 999) - (b.AddressInfo?.Distance ?? 999));
+
+      if(!suitable.length) return { status: 'filtered_none' };
+      const info = suitable[0].AddressInfo || {};
+      const label = info.Title ? `${info.Title}${info.Town ? ', ' + info.Town : ''}` : null;
+      return {
+        status: 'ok',
+        label,
+        lat: typeof info.Latitude === 'number' ? info.Latitude : null,
+        lon: typeof info.Longitude === 'number' ? info.Longitude : null
+      };
+    }catch(e){
+      return { status: 'error' };
+    }
   }
 
   async function fetchRoute(start, dest){
@@ -404,8 +506,13 @@
 
     try{
       setStatus('Orte werden gesucht…');
-      const startCoord = await geocode(startQ);
-      await sleep(1100);
+      let startCoord;
+      if(manualStartCoord){
+        startCoord = manualStartCoord;
+      } else {
+        startCoord = await geocode(startQ);
+        await sleep(1100);
+      }
       const destCoord = await geocode(destQ);
       await sleep(1100);
 
@@ -423,6 +530,8 @@
 
       // Ladestopp-Punkte entlang der Route bestimmen + benennen
       setStatus('Ladestopps werden lokalisiert…');
+      const ocmKey = ocmKeyInput.value.trim();
+      let ocmAuthFailed = false;
       const stopPoints = [];
       let cum = 0;
       for(const leg of legs){
@@ -431,8 +540,19 @@
           const pt = pointAtDistance(coords, cum);
           const place = await reverseGeocode(pt.lat, pt.lon);
           await sleep(1100);
-          const charger = await findCharger(pt.lat, pt.lon);
-          stopPoints.push({ ...pt, cumKm: cum, place: place || `${pt.lat.toFixed(3)}, ${pt.lon.toFixed(3)}`, charger });
+          const chargerResult = await findCharger(pt.lat, pt.lon, ocmKey);
+          if(chargerResult.status === 'auth') ocmAuthFailed = true;
+          const hasChargerCoords = chargerResult.status === 'ok' && chargerResult.lat != null && chargerResult.lon != null;
+          stopPoints.push({
+            lat: hasChargerCoords ? chargerResult.lat : pt.lat,
+            lon: hasChargerCoords ? chargerResult.lon : pt.lon,
+            routeLat: pt.lat,
+            routeLon: pt.lon,
+            cumKm: cum,
+            place: place || `Streckenpunkt bei km ${cum.toFixed(0)}`,
+            charger: chargerResult.status === 'ok' ? chargerResult.label : null,
+            chargerStatus: chargerResult.status
+          });
         }
       }
 
@@ -443,6 +563,12 @@
       document.getElementById('sumTotal').textContent = fmtMin(totalMin);
 
       warnBox.innerHTML = '';
+      if(ocmAuthFailed){
+        const w = document.createElement('div');
+        w.className = 'warn-box';
+        w.innerHTML = 'Ladepunkt-Suche fehlgeschlagen: Open Charge Map verlangt einen gültigen API-Key. Bitte oben unter „Ladepunkt-Suche" einen kostenlosen Key eintragen (map.openchargemap.io) und neu berechnen — sonst werden keine echten Stationen angezeigt.';
+        warnBox.appendChild(w);
+      }
 
       // --- UI: Tripbar ---
       const track = document.getElementById('tripbarTrack');
@@ -485,14 +611,26 @@
 
         if(leg.stopAfter){
           const sp = stopPoints[stopIdx++];
+          let chargerLine;
+          if(sp.charger){
+            chargerLine = '⚡ Empfohlene Station: ' + escapeHtml(sp.charger);
+          } else if(sp.chargerStatus === 'auth'){
+            chargerLine = '⚡ Ladepunkt-Suche ohne gültigen API-Key nicht möglich';
+          } else if(sp.chargerStatus === 'filtered_none'){
+            chargerLine = '⚡ Nur Autobahn-Raststätten/inkompatible Schnelllader in 15 km — kein Schuko/Typ2 gefunden';
+          } else if(sp.chargerStatus === 'none'){
+            chargerLine = '⚡ Kein Ladepunkt in 15 km gefunden — Position prüfen';
+          } else {
+            chargerLine = '⚡ Ladepunkt-Suche momentan nicht erreichbar';
+          }
           const stopLi = document.createElement('li');
           stopLi.className = 'stop';
           stopLi.innerHTML = `
             <div class="stop-marker">${stopIdx}</div>
             <div class="stop-body">
-              <div class="stop-title">Ladestopp ${stopIdx} &middot; ${escapeHtml(sp.place)}</div>
+              <div class="stop-title">Ladestopp ${stopIdx} &middot; ca. bei ${escapeHtml(sp.place)}</div>
               <div class="stop-meta">
-                ${sp.charger ? '⚡ ' + escapeHtml(sp.charger) : '⚡ Kein Ladepunkt in 10 km gefunden — Position prüfen'}<br>
+                ${chargerLine}<br>
                 Ankunft ~15% · Laden bis 85% · ca. ${fmtMin(chargeMinPerStop)}
               </div>
             </div>`;
@@ -515,6 +653,8 @@
 
       resultsCard.classList.remove('hidden');
       mapsCard.classList.remove('hidden');
+      const anyFallback = stopPoints.some(s => !(s.charger));
+      document.getElementById('mapsGeometryWarn').classList.toggle('hidden', !anyFallback);
       setStatus('');
 
       tripState = { startCoord, destCoord, stopPoints };
